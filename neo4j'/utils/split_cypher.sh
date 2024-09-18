@@ -14,15 +14,21 @@ chunk_file="${output_dir}/neo4j_part_${chunk_counter}.cypher"
 
 # Read the file line by line and split into chunks
 while IFS= read -r line; do
+    if (( line_counter == 0 )); then
+        chunk_file="${output_dir}/neo4j_part_${chunk_counter}.cypher"
+    fi
+    
     echo "$line" >> "$chunk_file"
     ((line_counter++))
 
-    # If we reach the chunk size, start a new chunk
-    if ((line_counter >= chunk_size)); then
+    if (( line_counter >= chunk_size )); then
         ((chunk_counter++))
-        chunk_file="${output_dir}/neo4j_part_${chunk_counter}.cypher"
         line_counter=0
     fi
 done < "$input_file"
+
+if (( line_counter > 0 )); then
+    ((chunk_counter++))
+fi
 
 echo "File has been split into $chunk_counter chunks."
