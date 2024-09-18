@@ -1,5 +1,5 @@
 # Ignore virtual environments
-AutoPubMedRetriever/
+KG-ADMET-PREDICTOR/
 .env/
 
 # Byte-compiled files

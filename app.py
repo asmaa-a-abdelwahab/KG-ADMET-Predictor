@@ -1,63 +1,49 @@
 import streamlit as st
 import pandas as pd
-from neo4j import GraphDatabase
-import networkx as nx
 import matplotlib.pyplot as plt
-import joblib
-from fpdf import FPDF
 
-# Step 1: Set up Neo4j driver
-def create_neo4j_driver(uri, user, password):
-    driver = GraphDatabase.driver(uri, auth=(user, password))
-    return driver
+# Set Streamlit to use the wide layout
+st.set_page_config(layout="wide")
 
-# Step 2: Connect to Neo4j database
-driver = create_neo4j_driver("neo4j://localhost:7687", "neo4j", "password")
+# Custom CSS for controlling each tab's width and text style
+st.markdown(
+    """
+    <style>
+    /* Styling all tabs to be 33.33% wide */
+    div[role="tablist"] > button {
+        width: 33.33% !important;  /* Set the width of each tab to 33.33% */
+        font-size: 60px !important;  /* Change the font size */
+        font-family: 'Arial', sans-serif !important;  /* Change the font family */
+        color: #ffffff !important;  /* Change the text color */
+        background-color: #808080 !important;  /* Light gray background color */
+        padding: 10px !important;  /* Add padding for more space */
+        border-radius: 5px !important;  /* Rounded corners for the tabs */
+        border: none !important;  /* Remove border */
+        text-align: center !important;  /* Center-align text */
+    }
 
-# Step 3: Function to query compound-gene interactions from Neo4j
-def get_compound_gene_interactions(driver, compound, gene):
-    with driver.session() as session:
-        query = """
-        MATCH (c:Compound {name: $compound})-[r:INTERACTS_WITH]->(g:Gene {name: $gene})
-        RETURN c.name as compound, g.name as gene, r.interaction_type as interaction_type
-        """
-        result = session.run(query, compound=compound, gene=gene)
-        return result.data()
+    /* Change the hover effect */
+    div[role="tablist"] > button:hover {
+        background-color: #696969 !important;  /* Darker gray on hover */
+        color: #ffffff !important;  /* Text color on hover */
+    }
 
-# Step 4: Function to visualize Neo4j graph data
-def visualize_graph(interactions):
-    G = nx.Graph()
-    for interaction in interactions:
-        compound = interaction['compound']
-        gene = interaction['gene']
-        G.add_node(compound, color='blue')
-        G.add_node(gene, color='orange')
-        G.add_edge(compound, gene)
+    /* Change the appearance of the active tab */
+    div[role="tablist"] > button[aria-selected="true"] {
+        background-color: #505050 !important;  /* Even darker gray for active tab */
+        font-weight: bold !important;  /* Bold font for active tab */
+        color: #ffffff !important;  /* Text color for active tab */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    pos = nx.spring_layout(G)
-    colors = ['blue' if G.nodes[n]['color'] == 'blue' else 'orange' for n in G.nodes]
-    nx.draw(G, pos, with_labels=True, node_color=colors, node_size=1500)
-    plt.show()
 
-# Step 5: Function to generate a downloadable PDF report
-def generate_pdf_report(compound, gene, prediction, confidence_score):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="Compound-Gene Interaction Report", ln=True)
-    pdf.cell(200, 10, txt=f"Compound: {compound}", ln=True)
-    pdf.cell(200, 10, txt=f"Gene: {gene}", ln=True)
-    pdf.cell(200, 10, txt=f"Prediction: {prediction}", ln=True)
-    pdf.cell(200, 10, txt=f"Confidence Score: {confidence_score}", ln=True)
-    pdf.output("/mnt/data/report.pdf")
+# Streamlit app layout
+st.title("CYP450-KG Application")
 
-# Step 6: Load your trained deep learning model
-model = joblib.load("path_to_model.pkl")
-
-# Step 7: Streamlit app layout
-st.title('CYP450-KG Application')
-
-# Create tabs
+# Create tabs with full page layout and custom widths and heights
 tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Report"])
 
 # Define a placeholder for the graph data and prediction report
@@ -67,37 +53,64 @@ prediction_report = None
 # Tab 1: Knowledge Graph Visualization and Interactions
 with tab1:
     st.header("Knowledge Graph")
-    
-    # Dropdowns for selecting Compounds and Genes
-    selected_compound = st.selectbox("Select Compound", ["Compound A", "Compound B"])
-    selected_gene = st.selectbox("Select Gene", ["Gene 1", "Gene 2"])
+
+    # Sidebar for this tab only
+    with st.sidebar:
+        # Sidebar for Configuration
+        st.sidebar.markdown(
+            """
+            <div style="float: left;">
+                <img src="https://raw.githubusercontent.com/asmaa-a-abdelwahab/AIGraphQuery-/main/EwC%20full%20logo.png" alt="Logo" width="100" style="border-radius: 1px; float: left;">
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Sidebar for input fields
+        st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
+        st.sidebar.header("Sidebar Input Section")
+        # Adding inputs in the sidebar
+        neo4j_host = st.text_input("Neo4j Host", value="localhost")
+        neo4j_port = st.text_input("Neo4j Port", value="7687")
+        neo4j_user = st.text_input("Neo4j Username", value="neo4j")
+        neo4j_password = st.text_input("Neo4j Password", type="password")
+
+        # Dropdown for compound selection
+        selected_compound = st.selectbox(
+            "Select Compound", ["Compound A", "Compound B"]
+        )
+
+        # Dropdown for gene selection
+        selected_gene = st.selectbox("Select Gene", ["Gene 1", "Gene 2"])
 
     # Action buttons
     if st.button("Show Compound-Gene Interactions (PubChem)"):
-        # Get the compound-gene interactions from Neo4j
-        interactions = get_compound_gene_interactions(driver, selected_compound, selected_gene)
-        st.write(interactions)
-        graph_data = pd.DataFrame(interactions)  # Store the interactions for use in Tab 2
-        
-        # Visualize the interactions as a graph
-        visualize_graph(interactions)
-        st.pyplot(plt)
+        # Placeholder for showing interactions (Replace with actual interactions)
+        st.write(f"Showing interactions for {selected_compound} and {selected_gene}")
+        graph_data = pd.DataFrame(
+            {
+                "compound": [selected_compound],
+                "gene": [selected_gene],
+                "interaction_type": ["Sample Interaction"],
+            }
+        )
+        st.write(graph_data)
+
+        # Placeholder graph (Replace with actual graph logic)
+        fig, ax = plt.subplots()
+        ax.plot([1, 2, 3], [1, 2, 3])  # Example graph
+        st.pyplot(fig)
 
     # Button for predicting compound-gene interactions using the deep learning model
     if st.button("Predict Compound-Gene Interaction"):
-        input_data = [selected_compound, selected_gene]  # Adjust based on your model's input format
-        prediction = model.predict([input_data])[0]
-        confidence_score = model.predict_proba([input_data])[0][1]
-        st.write(f"Prediction: {prediction}")
-        st.write(f"Confidence Score: {confidence_score}")
-        
-        # Generate report and save it
-        generate_pdf_report(selected_compound, selected_gene, prediction, confidence_score)
+        # Placeholder for prediction logic (Replace with actual prediction logic)
+        st.write(f"Predicted interaction for {selected_compound} and {selected_gene}")
+        st.write(f"Confidence Score: 0.85")
         prediction_report = {
             "compound": selected_compound,
             "gene": selected_gene,
-            "prediction": prediction,
-            "confidence_score": confidence_score
+            "prediction": "Sample Prediction",
+            "confidence_score": 0.85,
         }
 
 # Tab 2: Tabular Data View
@@ -118,9 +131,8 @@ with tab3:
         st.write(f"Gene: {prediction_report['gene']}")
         st.write(f"Prediction: {prediction_report['prediction']}")
         st.write(f"Confidence Score: {prediction_report['confidence_score']}")
-        
-        # Provide link to download PDF report
-        st.write("Download the report: [Download PDF](https://app.streamlit.io/mnt/data/report.pdf)")
+
+        # Placeholder for PDF download link (Replace with actual PDF generation logic)
+        st.write("Download the report: [Download PDF](#)")
     else:
         st.write("No report available yet.")
-
