@@ -41,8 +41,6 @@ st.markdown(
 
 
 # Streamlit app layout
-st.title("CYP450-KG Application")
-
 # Create tabs with full page layout and custom widths and heights
 tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Report"])
 
@@ -56,11 +54,12 @@ with tab1:
 
     # Sidebar for this tab only
     with st.sidebar:
+        st.sidebar.title("CYP450-KG")
         # Sidebar for Configuration
         st.sidebar.markdown(
             """
             <div style="float: left;">
-                <img src="https://raw.githubusercontent.com/asmaa-a-abdelwahab/AIGraphQuery-/main/EwC%20full%20logo.png" alt="Logo" width="100" style="border-radius: 1px; float: left;">
+                <img src="https:///raw.githubusercontent.com/asmaa-a-abdelwahab/KG-ADMET-Predictor/main/kg_icon.png" alt="Logo" width="100" style="border-radius: 1px; float: left;">
             </div>
             """,
             unsafe_allow_html=True,
@@ -68,7 +67,6 @@ with tab1:
 
         # Sidebar for input fields
         st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
-        st.sidebar.header("Sidebar Input Section")
         # Adding inputs in the sidebar
         neo4j_host = st.text_input("Neo4j Host", value="localhost")
         neo4j_port = st.text_input("Neo4j Port", value="7687")
@@ -82,6 +80,18 @@ with tab1:
 
         # Dropdown for gene selection
         selected_gene = st.selectbox("Select Gene", ["Gene 1", "Gene 2"])
+
+        st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
+        st.sidebar.markdown(
+            """
+            <div style="position: absolute; bottom: 10; width: 100%; text-align: left;">
+                <p style="font-size:14px; color:black;">BY: 
+                    <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="font-size:14px; color:black;">Asmaa A. Abdelwahab</a>
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # Action buttons
     if st.button("Show Compound-Gene Interactions (PubChem)"):
