@@ -2,7 +2,7 @@
 
 
 ```
-/your_project/
+/project_folder_structure/
 │
 ├── /neo4j/               # Neo4j-specific files
 │   ├── Dockerfile         # Dockerfile for Neo4j
