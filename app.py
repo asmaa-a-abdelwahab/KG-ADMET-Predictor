@@ -11,7 +11,7 @@ st.markdown(
     <style>
     /* Styling all tabs to be 33.33% wide */
     div[role="tablist"] > button {
-        width: 33.33% !important;  /* Set the width of each tab to 33.33% */
+        width: 40% !important;  /* Set the width of each tab to 33.33% */
         font-size: 60px !important;  /* Change the font size */
         font-family: 'Arial', sans-serif !important;  /* Change the font family */
         color: #ffffff !important;  /* Change the text color */
@@ -54,16 +54,27 @@ with tab1:
 
     # Sidebar for this tab only
     with st.sidebar:
-        st.sidebar.title("CYP450-KG")
-        # Sidebar for Configuration
+        # Inject custom CSS for styling the title
         st.sidebar.markdown(
             """
-            <div style="float: left;">
-                <img src="https:///raw.githubusercontent.com/asmaa-a-abdelwahab/KG-ADMET-Predictor/main/kg_icon.png" alt="Logo" width="100" style="border-radius: 1px; float: left;">
-            </div>
+            <style>
+            .sidebar-title {
+                font-size: 40px;  /* Increase font size */
+                font-weight: bold;  /* Optional: Make the font bold */
+                color: black;  /* Optional: Change the color */
+            }
+            </style>
             """,
             unsafe_allow_html=True,
         )
+
+        # Use the class 'sidebar-title' in your markdown to apply the custom style
+        st.sidebar.markdown(
+            '<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True
+        )
+
+        # Sidebar for Configuration
+        st.sidebar.image("images/kg_icon.webp", width=150, use_column_width=False)
 
         # Sidebar for input fields
         st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
