@@ -77,6 +77,7 @@ with tab1:
             font-size: 40px;  /* Increase font size */
             font-weight: bold;  /* Optional: Make the font bold */
             color: black;  /* Optional: Change the color */
+            text-align: center; /* Center the title */
         }
         </style>
         """,
@@ -89,7 +90,9 @@ with tab1:
         st.markdown('<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True)
 
         # Displaying the logo image
-        st.image("images/kg_icon.webp", width=150, use_column_width=False)
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.image("images/kg_icon.webp", width=120, use_column_width=False)
 
         # Dropdown for compound selection
         selected_compound = st.selectbox(
@@ -109,10 +112,6 @@ with tab1:
             "Compound-Gene Interactions (Other Sources)",
             key="other_sources_interactions",
         )
-        # st.button(
-        #     "Compound-Gene Interactions (PubChem)", key="main_pubchem_interactions"
-        # )
-        # st.button("Predict Compound-Gene Interaction", key="main_predict_interaction")
 
         st.markdown("</div>", unsafe_allow_html=True)  # Close div for custom buttons
 
