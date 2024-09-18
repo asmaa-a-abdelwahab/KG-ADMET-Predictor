@@ -21,3 +21,14 @@
 └── README.md              # Instructions/documentation
 
 ```
+
+## Memory Recommendations for Neo4j:
+- Heap Memory (dbms.memory.heap.initial_size and dbms.memory.heap.max_size):
+
+    - Set to 8 GB (8G) for a 16 GB machine, leaving enough memory for other processes.
+- Page Cache (dbms.memory.pagecache.size):
+
+    - Set to around 6-7 GB to optimize the memory used for caching the graph in memory.
+- Garbage Collection (dbms.jvm.additional=-XX:+UseG1GC):
+
+    - G1 Garbage Collector is often recommended for large heaps in Neo4j.
