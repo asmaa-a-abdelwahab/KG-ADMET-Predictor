@@ -4,11 +4,12 @@
 ```
 /project_folder_structure/
 │
-├── /neo4j/               # Neo4j-specific files
+├── /neo4j/                # Neo4j-specific files
 │   ├── Dockerfile         # Dockerfile for Neo4j
 │   └── neo4j.conf         # Neo4j configuration file
+│   └── /utils/            # Utility scripts
 │
-├── /streamlit-app/        # Streamlit app-specific files
+├── /app/                  # Streamlit app-specific files
 │   ├── Dockerfile         # Dockerfile for the Streamlit app
 │   ├── app.py             # Streamlit app code
 │   ├── requirements.txt   # Python dependencies for the Streamlit app
@@ -16,6 +17,7 @@
 │   └── /utils/            # Utility scripts
 │
 ├── docker-compose.yml     # Docker Compose configuration
+├── LICENSE                # license
 └── README.md              # Instructions/documentation
 
 ```
