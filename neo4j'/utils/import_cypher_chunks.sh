@@ -1,16 +1,16 @@
 #!/bin/bash
 
-# Cypher chunk directory
+# Directory where Cypher chunk files are stored
 chunk_dir="/cypher/Cypher_Chunks"
 
-# Neo4j credentials (you can also retrieve these from environment variables if needed)
+# Neo4j credentials
 user="neo4j"
 password="cyp450kg"
 
-# Wait for Neo4j to start up (you can adjust the waiting time if needed)
+# Wait for Neo4j to start
 sleep 15
 
-# Loop through all Cypher files in the chunk directory and run cypher-shell on each
+# Loop through all Cypher files in the chunk directory and import them using cypher-shell
 for file in "$chunk_dir"/*.cypher; do
     echo "Importing $file..."
     cypher-shell -u $user -p $password -f "$file"
