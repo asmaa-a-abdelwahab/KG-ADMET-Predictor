@@ -1,6 +1,6 @@
-import streamlit as st
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
+import streamlit as st
 
 # Set Streamlit to use the wide layout
 st.set_page_config(layout="wide")
@@ -92,20 +92,8 @@ with tab1:
         # Dropdown for gene selection
         selected_gene = st.selectbox("Select Gene", ["Gene 1", "Gene 2"])
 
-        st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
-        st.sidebar.markdown(
-            """
-            <div style="position: absolute; bottom: 10; width: 100%; text-align: left;">
-                <p style="font-size:14px; color:black;">BY: 
-                    <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="font-size:14px; color:black;">Asmaa A. Abdelwahab</a>
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
     # Action buttons
-    if st.button("Show Compound-Gene Interactions (PubChem)"):
+    if st.sidebar.button("Show Compound-Gene Interactions (PubChem)"):
         # Placeholder for showing interactions (Replace with actual interactions)
         st.write(f"Showing interactions for {selected_compound} and {selected_gene}")
         graph_data = pd.DataFrame(
@@ -123,10 +111,10 @@ with tab1:
         st.pyplot(fig)
 
     # Button for predicting compound-gene interactions using the deep learning model
-    if st.button("Predict Compound-Gene Interaction"):
+    if st.sidebar.button("Predict Compound-Gene Interaction"):
         # Placeholder for prediction logic (Replace with actual prediction logic)
         st.write(f"Predicted interaction for {selected_compound} and {selected_gene}")
-        st.write(f"Confidence Score: 0.85")
+        st.write("Confidence Score: 0.85")
         prediction_report = {
             "compound": selected_compound,
             "gene": selected_gene,
@@ -134,6 +122,17 @@ with tab1:
             "confidence_score": 0.85,
         }
 
+st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
+st.sidebar.markdown(
+    """
+    <div style="position: absolute; bottom: 10; width: 100%; text-align: left;">
+        <p style="font-size:14px; color:black;">BY: 
+            <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="font-size:14px; color:black;">Asmaa A. Abdelwahab</a>
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 # Tab 2: Tabular Data View
 with tab2:
     st.header("Tabular Data")
