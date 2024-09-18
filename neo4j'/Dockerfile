@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y python3 python3-pip wget && \
 RUN gdown "https://drive.google.com/uc?id=1ElYAtgyC5IJNZXXfgGvCLSXi9hcmInHo" -O /cypher/neo4j.cypher
 
 # Copy the Bash scripts to the container
-COPY split_cypher.sh /usr/local/bin/split_cypher.sh
-COPY import_cypher_chunks.sh /usr/local/bin/import_cypher_chunks.sh
+COPY utils/split_cypher.sh /usr/local/bin/split_cypher.sh
+COPY utils/import_cypher_chunks.sh /usr/local/bin/import_cypher_chunks.sh
 
 # Make the scripts executable
 RUN chmod +x /usr/local/bin/split_cypher.sh
