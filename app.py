@@ -61,7 +61,7 @@ st.markdown(
 
 # Streamlit app layout
 # Create tabs with full page layout and custom widths and heights
-tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Report"])
+tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Prediction Report"])
 
 # Define a placeholder for the graph data and prediction report
 graph_data = None
