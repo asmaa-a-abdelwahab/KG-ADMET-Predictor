@@ -1,7 +1,7 @@
 # Ignore virtual environments
 KG-ADMET-PREDICTOR/
 .env/
-./interactive_app.py
+*_app.py
 
 # Byte-compiled files
 *.pyc
