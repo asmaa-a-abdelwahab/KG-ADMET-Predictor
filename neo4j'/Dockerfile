@@ -21,7 +21,7 @@ RUN chmod +x /usr/local/bin/split_cypher.sh
 RUN chmod +x /usr/local/bin/import_cypher_chunks.sh
 
 # Switch to the non-root user (neo4j)
-USER neo4j
+# USER neo4j
 
 # Set memory configuration (Optional)
 ENV NEO4J_dbms_memory_heap_initial__size=8G
