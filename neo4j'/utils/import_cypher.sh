@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Wait for Neo4j to start
-/usr/local/bin/wait_for_neo4j.sh
-
 # Neo4j credentials
 user="neo4j"
 old_password="neo4j"
@@ -24,18 +21,15 @@ password="$new_password"
 echo "Using the default 'neo4j' database..."
 
 # Wait for Neo4j to be ready
+echo "Waiting for Neo4j to be ready..."
 sleep 5
 
-# Run the import script for Cypher files
-chunk_dir="/cypher/Cypher_Chunks"
-for file in "$chunk_dir"/*.cypher; do
-    echo "Importing $file..."
-    if cat $file | cypher-shell -u "$user" -p "$password" -d neo4j; then
-        echo "$file imported successfully."
-    else
-        echo "Failed to import $file due to an authentication or connection error."
-        exit 1
-    fi
-done
-
+# Run the import script for Cypher
+echo "Importing neo4j.cypher..."
+cat /cypher/neo4j.cypher | cypher-shell -u "$user" -p "$password" -d neo4j
+if [ $? -ne 0 ]; then
+    echo "Failed to import the database. Check permissions or Neo4j status."
+    exit 1
+fi
 echo "Database and import process completed."
+

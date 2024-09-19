@@ -12,13 +12,11 @@ RUN mkdir -p /cypher && chown -R neo4j:neo4j /cypher
 RUN gdown "https://drive.google.com/uc?id=1V4Cn9dX0VzDavQmTMrh93u9hXD-8NftR" -O /cypher/neo4j.cypher
 
 # Copy the Bash scripts to the container
-COPY utils/split_cypher.sh /usr/local/bin/split_cypher.sh
-COPY utils/import_cypher_chunks.sh /usr/local/bin/import_cypher_chunks.sh
+COPY utils/import_cypher.sh /usr/local/bin/import_cypher.sh
 COPY utils/wait_for_neo4j.sh /usr/local/bin/wait_for_neo4j.sh
 
 # Make the scripts executable as root (before switching to non-root)
-RUN chmod +x /usr/local/bin/split_cypher.sh
-RUN chmod +x /usr/local/bin/import_cypher_chunks.sh
+RUN chmod +x /usr/local/bin/import_cypher.sh
 
 # Set memory configuration (Optional)
 ENV NEO4J_dbms_memory_heap_initial__size=8G
@@ -29,10 +27,11 @@ ENV NEO4J_dbms_memory_pagecache_size=6G
 EXPOSE 7474 7687
 
 # Start Neo4j, wait for it to be ready, and then run the import scripts
-CMD ["/bin/bash", "-c", "neo4j start && /usr/local/bin/wait_for_neo4j.sh && /usr/local/bin/split_cypher.sh /cypher/neo4j.cypher /cypher/Cypher_Chunks 10000 && /usr/local/bin/import_cypher_chunks.sh"]
+CMD ["/bin/bash", "-c", "neo4j start && /usr/local/bin/wait_for_neo4j.sh && /usr/local/bin/import_cypher.sh"]
 
 # to build the image
 # docker build -t neo4j_docker '.\neo4j''\'
 
 # to run it (with environment variable for NEO4J_AUTH)
 # docker run -it -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/cyp450kg neo4j_docker
+
