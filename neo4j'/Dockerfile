@@ -1,5 +1,5 @@
 # Use the official Neo4j image as the base image
-FROM neo4j:5.3
+FROM neo4j:latest
 
 # Install Python3, pip3, wget, and curl to use gdown and to check Neo4j readiness
 RUN apt-get update && apt-get install -y python3 python3-pip wget curl && \
