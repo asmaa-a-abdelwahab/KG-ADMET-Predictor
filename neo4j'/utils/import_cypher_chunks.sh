@@ -30,7 +30,7 @@ sleep 5
 chunk_dir="/cypher/Cypher_Chunks"
 for file in "$chunk_dir"/*.cypher; do
     echo "Importing $file..."
-    if cypher-shell -u "$user" -p "$password" -d neo4j -f "$file"; then
+    if cat $file | cypher-shell -u "$user" -p "$password" -d neo4j; then
         echo "$file imported successfully."
     else
         echo "Failed to import $file due to an authentication or connection error."
