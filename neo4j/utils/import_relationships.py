@@ -85,9 +85,7 @@ def execute_batch(batch):
         temp_file_path = temp_file.name
 
     # Construct the command to run cypher-shell
-    command = (
-        f"cypher-shell -u neo4j -p your_password --format plain < {temp_file_path}"
-    )
+    command = f"cypher-shell -u neo4j -p cyp450kg --format plain < {temp_file_path}"
 
     # Run the command using subprocess
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
