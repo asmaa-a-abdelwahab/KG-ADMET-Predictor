@@ -62,51 +62,14 @@ def parse_json(json_str):
             return None
 
 
-def wait_for_neo4j():
-    """
-    Waits for Neo4j to be fully up and running.
-
-    This function will wait up to 30 attempts (150 seconds) for Neo4j to be
-    ready by attempting to execute a simple Cypher query. If the query is
-    successful, the function will return True. If the maximum number of attempts
-    is reached without success, the function will return False.
-    """
-    print("Waiting for Neo4j to be ready...")
-    for _ in range(30):  # Wait up to 30 attempts (150 seconds)
-        try:
-            # Attempt to execute a simple Cypher query
-            result = subprocess.run(
-                ["cypher-shell", "-u", "neo4j", "-p", "cyp450kg", "RETURN 1"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                print("Neo4j is ready.")
-                return True
-        except Exception as e:
-            # Log the error and continue waiting
-            print(f"Waiting for Neo4j... {e}")
-        # Wait 5 seconds before attempting again
-        time.sleep(5)
-    print("Failed to connect to Neo4j after waiting.")
-    return False
-
-
 def import_nodes(nodes_file, batch_size):
     """
     Imports nodes from a CSV file into Neo4j using Cypher queries in batches.
-
-    This function will wait for Neo4j to be ready before attempting to import
-    nodes. If Neo4j is not ready after waiting, the function will exit.
 
     :param nodes_file: The path to the CSV file containing the nodes to import.
     :param batch_size: The number of nodes to include in each batch. This can be
         adjusted to control memory usage and performance.
     """
-    if not wait_for_neo4j():
-        print("Neo4j is not ready. Exiting.")
-        return
-
     with open(nodes_file, "r") as file:
         reader = csv.DictReader(file)
         batch = []
@@ -116,22 +79,28 @@ def import_nodes(nodes_file, batch_size):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []  # To store future tasks
 
+            # Iterate over each row in the CSV file
             for row in reader:
                 count += 1
                 try:
                     # Clean and parse the JSON-like string
+                    # Remove double-double quotes with single-double quotes
+                    # Remove unescaped newlines or carriage returns
+                    # Correct misplaced commas or brackets if needed
+                    # Attempt to fix misplaced double quotes or other formatting issues
                     json_str = clean_json_string(row["n"])
-                    node_data = parse_json(
-                        json_str
-                    )  # Use parse_json with improved error handling
+                    node_data = parse_json(json_str)
                     if node_data is None:
                         continue  # Skip rows that still fail parsing
                 except Exception as e:
                     print(f"Error parsing JSON at row {count}: {e}")
                     continue  # Skip the problematic row
 
+                # Extract labels and properties from the parsed JSON
                 labels = ":".join(node_data["labels"])
                 properties = node_data["properties"]
+
+                # Create Cypher query with properties
                 properties_string = ", ".join(
                     [f"{key}: {json.dumps(value)}" for key, value in properties.items()]
                 )

@@ -37,13 +37,13 @@ fi
 
 echo "Successfully accessed the default database 'neo4j' for project use."
 
-# Stop the temporary Neo4j instance
-echo "Stopping Neo4j to restart in console mode..."
-neo4j stop
+# # Stop the temporary Neo4j instance
+# echo "Stopping Neo4j to restart in console mode..."
+# neo4j stop
 
-# Ensure Neo4j stops completely before starting it again
-sleep 5
+# # Ensure Neo4j stops completely before starting it again
+# sleep 5
 
-# Start Neo4j in the foreground
-echo "Starting Neo4j in console mode..."
-exec neo4j console
+# # Start Neo4j in the foreground
+# echo "Starting Neo4j in console mode..."
+# exec neo4j console
