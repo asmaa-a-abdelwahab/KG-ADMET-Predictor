@@ -1,16 +1,32 @@
 import csv
 import json
+import os
+import re
 import subprocess
 import tempfile
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Path to the relationships CSV file
 relationships_file = (
     "/cypher/relationships.csv"  # Adjust based on where you copy the file
 )
-batch_size = 1000  # Adjust based on performance testing
-max_workers = 4  # Number of parallel workers for executing batches
+batch_size = 5000  # Adjust based on performance testing
+max_workers = 10  # Number of parallel workers for executing batches
+
+
+def sanitize_key(key):
+    """
+    Sanitizes a property key to make it compatible with Neo4j Cypher.
+    Replaces '%' with 'percentage' and removes other invalid characters.
+
+    :param key: The original property key.
+    :return: The sanitized property key.
+    """
+    # Replace '%' with 'percentage'
+    key = key.replace("%", "percentage")
+    # Remove any other characters that are not allowed in identifiers
+    key = re.sub(r"[^a-zA-Z0-9_]", "_", key)
+    return key
 
 
 def import_relationships(relationships_file, batch_size):
@@ -45,9 +61,17 @@ def import_relationships(relationships_file, batch_size):
                     print(f"Error parsing JSON at row {count}: {e}")
                     continue  # Skip problematic rows
 
+                # Sanitize property keys to ensure they are valid identifiers
+                sanitized_properties = {
+                    sanitize_key(k): v for k, v in properties.items()
+                }
+
                 # Create a Cypher query to create the relationship
                 properties_string = ", ".join(
-                    [f"{key}: {json.dumps(value)}" for key, value in properties.items()]
+                    [
+                        f"{key}: {json.dumps(value)}"
+                        for key, value in sanitized_properties.items()
+                    ]
                 )
                 cypher_query = f"""
                 MATCH (a), (b)

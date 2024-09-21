@@ -40,12 +40,3 @@ CMD ["/bin/bash", "-c", "neo4j console"]
 # docker run -it -p 7474:7474 -p 7687:7687 -it neo4j_docker bash
 # docker exec -it 56161cbc6cc1 bash
 
-# download nodes and relationships from drive
-# gdown "https://drive.google.com/uc?id=1gfRcd1THN1KqlCB0Wi0i8X-DLjfcJulZ" -O /cypher/nodes.csv 
-# => python3 /usr/local/bin/import_nodes.py
-# gdown "https://drive.google.com/uc?id=1nM8d1TG3-ftKl4EgCs809aqAZUGNdO5O" -O /cypher/relationships.csv 
-# => python3 /usr/local/bin/import_relationships.py
-
-# test neo4j graph
-# cypher-shell -u neo4j -p cyp450kg
-# echo "MATCH (n) RETURN count(n);" | cypher-shell -u neo4j -p cyp450kg
