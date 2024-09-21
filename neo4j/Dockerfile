@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y python3 python3-pip wget curl nano && \
 RUN mkdir -p /cypher && chown -R neo4j:neo4j /cypher
 
 # Copy the custom Neo4j configuration file to the appropriate location
-COPY neo4j.conf /var/lib/neo4j/conf/neo4j.conf
+COPY conf/neo4j.conf /var/lib/neo4j/conf/neo4j.conf
 
 # Copy the Bash scripts and Python scripts to the container
 COPY utils/start_neo4j.sh /usr/local/bin/start_neo4j.sh
