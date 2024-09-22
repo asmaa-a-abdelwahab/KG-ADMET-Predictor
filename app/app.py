@@ -92,7 +92,7 @@ with tab1:
         # Displaying the logo image
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            st.image("app/images/kg_icon.webp", width=120, use_column_width=False)
+            st.image("images/kg_icon.webp", width=120, use_column_width=False)
 
         # Dropdown for compound selection
         selected_compound = st.selectbox(

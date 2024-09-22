@@ -24,13 +24,11 @@ RUN chmod +x /usr/local/bin/start_neo4j.sh /usr/local/bin/build_db.sh
 # Expose ports for Neo4j (7474 for HTTP and 7687 for Bolt)
 EXPOSE 7474 7687
 
-# Start Neo4j in console mode to keep the service running in the foreground
-CMD ["/bin/bash"]
-
 # Set up the entrypoint script to run the initialization
-ENTRYPOINT ["/usr/local/bin/build_db.sh"]
+# ENTRYPOINT ["/usr/local/bin/build_db.sh"]
 
-
+# Start Neo4j in console mode to keep the service running in the foreground
+CMD ["neo4j", "console"]
 
 # to build the image
 # docker build -t neo4j_docker '.\neo4j'
