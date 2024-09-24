@@ -15,14 +15,14 @@ services:
     #   - "/usr/local/bin/build_db.sh"  # Change if you want a different entrypoint
 
   streamlit:
-    build: ./app
-    container_name: app
+    build: ./streamlit
+    container_name: streamlit
     ports:
       - "8501:8501"
     depends_on:
       - neo4j         # Ensure Neo4j starts before Streamlit
     volumes:
-      - ./app:/app          # Mount the Streamlit app code
+      - ./streamlit:/streamlit          # Mount the Streamlit app code
 
     # environment:
     #   - NEO4J_AUTH=neo4j/cyp450kg  # Replace with your actual password
