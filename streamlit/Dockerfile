@@ -7,7 +7,7 @@ FROM python:3.9.5-slim-buster
 EXPOSE 8501
 
 # Set the working directory in the container to /app
-WORKDIR /app
+WORKDIR /streamlit
 
 # Copy the requirements.txt file to the container
 COPY requirements.txt .
@@ -19,7 +19,7 @@ RUN pip install -U pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install nano text editor to be able to edit the code in the container
-RUN apt-get update && apt-get install nano -y
+RUN apt-get update && apt-get install nano -y && pip3 install neo4j
 
 # Set the default command for the container to run the Streamlit app
 CMD streamlit run app.py
