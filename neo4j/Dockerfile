@@ -39,4 +39,3 @@ ENTRYPOINT ["/usr/local/bin/build_db.sh"]
 # To run it in interactive mode
 # docker run -it -p 7474:7474 -p 7687:7687 -it neo4j_docker bash
 # docker exec -it 56161cbc6cc1 bash
-
