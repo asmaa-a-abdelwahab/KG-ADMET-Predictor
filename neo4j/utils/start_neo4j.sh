@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Start Neo4j in the background temporarily
-neo4j start
+# neo4j start
 
 user="neo4j"
 old_password="neo4j"
