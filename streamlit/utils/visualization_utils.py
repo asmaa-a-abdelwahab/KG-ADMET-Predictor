@@ -1,7 +1,6 @@
 import streamlit as st
 from pyvis.network import Network
 import streamlit.components.v1 as components
-from py2neo import Graph
 import pandas as pd
 
 
@@ -38,16 +37,33 @@ def display_graph(graph):
     # Extract nodes and edges from the graph
     nodes, edges = extract_graph_data(graph)
 
-    # Create a PyVis network
-    net = Network(height="500px", width="100%", bgcolor="#222222", font_color="white")
+    # Create a PyVis network with a white background and black font color
+    net = Network(
+        height="100vh",
+        width="100vw",
+        bgcolor="#f9f9f9",
+        font_color="black",
+        #     filter_menu=True,
+        #     select_menu=True,
+    )
 
-    # Add nodes and edges to the PyVis network
+    net.show_buttons(filter_=["nodes", "edges", "physics"])
+
+    # Add nodes to the PyVis network
     for node_id, props in nodes.items():
         label = props.get("CompoundName", "Unknown")
-        net.add_node(node_id, label=label, title=label)
+        net.add_node(
+            node_id.split(":")[-1], title=label
+        )  # I can set node color here: color="#FF0000"
 
+    # Add edges to the PyVis network with relationship types as edge titles
     for edge in edges:
-        net.add_edge(edge[0], edge[1], title=edge[2])
+        start_node = edge[0].split(":")[-1]
+        end_node = edge[1].split(":")[-1]
+        relationship_type = edge[2]
+        net.add_edge(
+            start_node, end_node, title=relationship_type
+        )  # I can set edge color here: color="#FF0000"
 
     # Customize the network layout
     net.repulsion(
@@ -58,19 +74,21 @@ def display_graph(graph):
         damping=0.95,
     )
 
+    net.set_edge_smooth("dynamic")
+
     # Save the graph as an HTML file
     path = "/tmp"  # or use a relative path for local development
     net.save_graph(f"{path}/pyvis_graph.html")
 
     # Load and display the HTML file in Streamlit
     HtmlFile = open(f"{path}/pyvis_graph.html", "r", encoding="utf-8")
-    components.html(HtmlFile.read(), height=500)
+    components.html(HtmlFile.read(), width=1172, height=850)
 
 
 def display_table(graph):
     """
-    Display the Neo4j Graph result as a table.
-    This function dynamically adapts to the structure of the nodes' properties.
+    Display the Neo4j Graph result as a table, including nodes and relationships.
+    This function dynamically adapts to the structure of both the nodes' and relationships' properties.
 
     :param graph: Neo4j Graph object containing nodes and relationships.
     """
@@ -79,17 +97,32 @@ def display_table(graph):
         return
 
     # Extract nodes and relationships data
-    nodes, _ = extract_graph_data(graph)
+    nodes, edges = extract_graph_data(graph)
 
-    # Prepare data for the table by extracting node properties
-    rows = []
+    # Prepare node data for the table
+    node_rows = []
     for node_id, props in nodes.items():
-        row = {"Node ID": node_id}  # Include Node ID in the table
-        row.update(props)  # Include all node properties (e.g., CompoundName, etc.)
-        rows.append(row)
+        row = {"Node ID": node_id.split(":")[-1]}
+        row.update(props)  # Add all node properties (e.g., CompoundName, etc.)
+        node_rows.append(row)
 
-    # Convert the list of dictionaries into a DataFrame
-    df = pd.DataFrame(rows)
+    # Prepare relationship data for the table
+    relationship_rows = []
+    for start_node, end_node, rel_type in edges:
+        rel_row = {
+            "Start Node": start_node.split(":")[-1],
+            "End Node": end_node.split(":")[-1],
+            "Relationship Type": rel_type,
+        }
+        relationship_rows.append(rel_row)
 
-    # Display the DataFrame as a table using Streamlit
-    st.dataframe(df)
+    # Convert node and relationship rows into DataFrames
+    node_df = pd.DataFrame(node_rows)
+    relationship_df = pd.DataFrame(relationship_rows)
+
+    # Display the node and relationship DataFrames as tables in Streamlit
+    st.subheader("Node Information")
+    st.dataframe(node_df)
+
+    st.subheader("Relationship Information")
+    st.dataframe(relationship_df)

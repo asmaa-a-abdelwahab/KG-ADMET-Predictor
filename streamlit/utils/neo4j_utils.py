@@ -35,6 +35,24 @@ class Neo4jBase:
             logger.info("Neo4j connection closed successfully.")
 
 
+def create_indexes(driver: Driver) -> None:
+    """
+    Creates indexes for the Compound and Gene nodes to optimize queries.
+    """
+    index_queries = [
+        "CREATE INDEX IF NOT EXISTS FOR (c:Compound) ON (c.CompoundName)",
+        "CREATE INDEX IF NOT EXISTS FOR (g:Gene) ON (g.GeneSymbol)",
+    ]
+
+    try:
+        with driver.session() as session:
+            for query in index_queries:
+                session.run(query)
+                logger.info(f"Index created successfully or already exists: {query}")
+    except Exception as e:
+        logger.error(f"Error creating indexes: {e}")
+
+
 def execute_query(driver: Driver, query: str) -> List[List[Any]]:
     try:
         with driver.session() as session:
@@ -80,7 +98,7 @@ def get_similar_compounds(driver: Driver, compound_names: List[str]) -> List[Lis
     """
     # Construct the Cypher query with parameters to avoid issues with string formatting
     query = """
-    MATCH (c1:Compound)-[r:IS_SIMILAR_TO]->(c2:Compound)
+    PROFILE MATCH (c1:Compound)-[r:IS_SIMILAR_TO]->(c2:Compound)
     WHERE c1.CompoundName IN $compound_names
     AND c2.CompoundName IS NOT NULL AND c2.CompoundName <> ""
     RETURN c1, r, c2;
