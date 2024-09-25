@@ -1,84 +1,95 @@
-# visualization.py
-
-import networkx as nx
-import matplotlib.pyplot as plt
-from typing import List, Any
-import pandas as pd
 import streamlit as st
+from pyvis.network import Network
+import streamlit.components.v1 as components
+from py2neo import Graph
+import pandas as pd
 
 
-def display_graph(results: List[dict]) -> None:
+def extract_graph_data(graph):
     """
-    Displays a NetworkX graph based on the Neo4j query results.
-    :param results: A list of dictionaries representing nodes and relationships.
+    Extracts nodes and relationships from the Neo4j Graph object.
+    :param graph: Neo4j Graph object containing nodes and relationships.
+    :return: A tuple (nodes, edges) representing the graph.
     """
-    # Initialize a NetworkX graph
-    G = nx.DiGraph()
-    node_data = {}
+    nodes = {}
+    edges = []
 
-    # Process the results
-    for record in results:
-        # If it's a node (has 'labels' and 'properties')
-        if "labels" in record and "properties" in record:
-            node_id = record["identity"]
-            compound_name = record["properties"].get("CompoundName", "Unknown")
-            G.add_node(node_id, label=compound_name)
-            node_data[node_id] = compound_name
+    # Extract nodes
+    for node in graph.nodes:
+        node_id = node.element_id
+        props = dict(node)  # Get node properties as a dictionary
+        nodes[node_id] = props
 
-        # If it's a relationship (has 'type' and 'start', 'end')
-        elif "type" in record and "start" in record and "end" in record:
-            start_node = record["start"]
-            end_node = record["end"]
-            G.add_edge(start_node, end_node, label=record["type"])
+    # Extract relationships
+    for rel in graph.relationships:
+        start_node = rel.start_node.element_id
+        end_node = rel.end_node.element_id
+        relationship_type = rel.type
+        edges.append((start_node, end_node, relationship_type))
 
-    # Draw the graph
-    plt.figure(figsize=(10, 8))
-    pos = nx.spring_layout(G, seed=42)
-    labels = {node: data for node, data in node_data.items()}
+    return nodes, edges
 
-    # Draw nodes with labels
-    nx.draw(
-        G,
-        pos,
-        with_labels=True,
-        labels=labels,
-        node_color="skyblue",
-        node_size=2000,
-        font_size=12,
-        font_weight="bold",
-        arrows=True,
+
+def display_graph(graph):
+    """
+    Displays an interactive PyVis graph based on the Neo4j query results.
+    :param graph: Neo4j Graph object.
+    """
+    # Extract nodes and edges from the graph
+    nodes, edges = extract_graph_data(graph)
+
+    # Create a PyVis network
+    net = Network(height="500px", width="100%", bgcolor="#222222", font_color="white")
+
+    # Add nodes and edges to the PyVis network
+    for node_id, props in nodes.items():
+        label = props.get("CompoundName", "Unknown")
+        net.add_node(node_id, label=label, title=label)
+
+    for edge in edges:
+        net.add_edge(edge[0], edge[1], title=edge[2])
+
+    # Customize the network layout
+    net.repulsion(
+        node_distance=420,
+        central_gravity=0.33,
+        spring_length=110,
+        spring_strength=0.10,
+        damping=0.95,
     )
 
-    plt.title("Compound Similarity Graph")
-    st.pyplot(plt)
+    # Save the graph as an HTML file
+    path = "/tmp"  # or use a relative path for local development
+    net.save_graph(f"{path}/pyvis_graph.html")
+
+    # Load and display the HTML file in Streamlit
+    HtmlFile = open(f"{path}/pyvis_graph.html", "r", encoding="utf-8")
+    components.html(HtmlFile.read(), height=500)
 
 
-def display_table(result: List[dict]) -> None:
+def display_table(graph):
     """
-    Display the query result as a table.
-    This function dynamically determines the structure of the result and adapts the table accordingly.
+    Display the Neo4j Graph result as a table.
+    This function dynamically adapts to the structure of the nodes' properties.
 
-    :param result: List of dictionaries where each dictionary represents a row from the query result.
+    :param graph: Neo4j Graph object containing nodes and relationships.
     """
-    if not result:
+    if not graph:
         st.warning("No data to display.")
         return
 
-    # Process the result to convert it to a flat structure if needed
+    # Extract nodes and relationships data
+    nodes, _ = extract_graph_data(graph)
+
+    # Prepare data for the table by extracting node properties
     rows = []
-    for record in result:
-        # Flatten the nested structure
-        row = {}
-        for key, value in record.items():
-            if isinstance(value, dict):  # If the value is a node or relationship
-                for sub_key, sub_value in value.items():
-                    row[f"{key}_{sub_key}"] = sub_value
-            else:
-                row[key] = value
+    for node_id, props in nodes.items():
+        row = {"Node ID": node_id}  # Include Node ID in the table
+        row.update(props)  # Include all node properties (e.g., CompoundName, etc.)
         rows.append(row)
 
-    # Create a DataFrame from the processed rows
+    # Convert the list of dictionaries into a DataFrame
     df = pd.DataFrame(rows)
 
-    # Display the DataFrame in Streamlit
+    # Display the DataFrame as a table using Streamlit
     st.dataframe(df)

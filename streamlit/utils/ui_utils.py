@@ -5,6 +5,7 @@ from utils.config import PAGE_ICON
 
 
 def display_sidebar(compound_list, gene_list):
+    # Sidebar title
     st.sidebar.markdown(
         '<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True
     )
@@ -13,16 +14,13 @@ def display_sidebar(compound_list, gene_list):
     with col2:
         st.image(PAGE_ICON, width=120, use_column_width=False)
 
+    # Sidebar dropdowns
     selected_compounds = st.sidebar.multiselect("Select Compound/s", compound_list)
     selected_genes = st.sidebar.multiselect("Select Gene/s", gene_list)
 
     return selected_compounds, selected_genes
 
 
-["N-(1,3-benzodioxol-5-yl)-4-methylbenzamide","[2-[(2,3-Dimethylcyclohexyl)amino]-2-oxoethyl] 2-cyclopentylacetate"]
-N'-[(3-methylphenoxy)acetyl]-2-oxo-2H-chromene-3-carbohydrazide
-N-(3-oxo-5-phenylpyrazolidin-4-yl)benzamide
-N-(2-methyl-1H-indol-5-yl)furan-2-carboxamide
 def apply_custom_styles() -> None:
     """
     Apply custom CSS styles to the Streamlit app. This function adds styling for tabs, sidebar, and buttons.

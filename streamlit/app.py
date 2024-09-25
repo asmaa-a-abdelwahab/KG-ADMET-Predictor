@@ -2,9 +2,15 @@
 
 import streamlit as st
 from utils.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
-from utils.neo4j_utils import Neo4jBase, get_compound_names, get_gene_symbols, get_similar_compounds
+from utils.neo4j_utils import (
+    Neo4jBase,
+    get_compound_names,
+    get_gene_symbols,
+    get_similar_compounds,
+)
 from utils.visualization_utils import display_graph, display_table
 from utils.ui_utils import display_sidebar, apply_custom_styles
+
 
 def main():
     # Set up Streamlit page config
@@ -27,11 +33,13 @@ def main():
     # Tabs
     tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Prediction Report"])
 
-    with tab1:
-        if st.sidebar.button("Show Similar Compounds"):
-            result = get_similar_compounds(neo4j_conn.driver, selected_compounds)
+    if st.sidebar.button("Show Similar Compounds"):
+        result = get_similar_compounds(neo4j_conn.driver, selected_compounds)
+        with tab1:
+            # st.write(result)
             display_graph(result)
-            display_table(selected_compounds, result)
+        with tab2:
+            display_table(result)
 
     # Add content for other tabs as necessary
 
