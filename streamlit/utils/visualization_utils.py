@@ -1,14 +1,30 @@
-import streamlit as st
-from pyvis.network import Network
-import streamlit.components.v1 as components
+"""
+Functions for visualizing Neo4j query results in Streamlit.
+
+Functions:
+    - extract_graph_data: Extracts nodes and relationships from a Neo4j Graph object.
+    - display_graph: Displays an interactive PyVis graph based on the Neo4j query results.
+    - display_table: Displays the Neo4j Graph result as a table, including nodes and relationships.
+"""
+
 import pandas as pd
+from pyvis.network import Network
+
+import streamlit as st
+import streamlit.components.v1 as components
 
 
 def extract_graph_data(graph):
     """
     Extracts nodes and relationships from the Neo4j Graph object.
-    :param graph: Neo4j Graph object containing nodes and relationships.
-    :return: A tuple (nodes, edges) representing the graph.
+
+    Parameters:
+        graph (Graph): Neo4j Graph object containing nodes and relationships.
+
+    Returns:
+        A tuple (nodes, edges) representing the graph.
+            - nodes (dict): A dictionary of node IDs to dictionaries of node properties.
+            - edges (list): A list of tuples containing the start node ID, end node ID, and relationship type.
     """
     nodes = {}
     edges = []
@@ -32,7 +48,9 @@ def extract_graph_data(graph):
 def display_graph(graph):
     """
     Displays an interactive PyVis graph based on the Neo4j query results.
-    :param graph: Neo4j Graph object.
+
+    Parameters:
+        graph (Graph): Neo4j Graph object containing nodes and relationships.
     """
     # Extract nodes and edges from the graph
     nodes, edges = extract_graph_data(graph)
@@ -87,10 +105,11 @@ def display_graph(graph):
 
 def display_table(graph):
     """
-    Display the Neo4j Graph result as a table, including nodes and relationships.
+    Displays the Neo4j Graph result as a table, including nodes and relationships.
     This function dynamically adapts to the structure of both the nodes' and relationships' properties.
 
-    :param graph: Neo4j Graph object containing nodes and relationships.
+    Parameters:
+        graph (Graph): Neo4j Graph object containing nodes and relationships.
     """
     if not graph:
         st.warning("No data to display.")

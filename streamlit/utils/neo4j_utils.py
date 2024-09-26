@@ -1,23 +1,42 @@
 # neo4j_utils.py
 
-from neo4j import GraphDatabase, Driver
-from typing import List, Any
 import logging
+from typing import Any, List
+
+from neo4j import Driver, GraphDatabase
 from utils.config import logger
 
 
 class Neo4jConnectionError(Exception):
+    """
+    Exception raised when there is a problem connecting to the Neo4j database.
+    """
+
     pass
 
 
 class Neo4jBase:
+    """
+    Base class for handling connections to the Neo4j database.
+    """
+
     def __init__(self, uri: str, user: str, password: str) -> None:
+        """
+        Initialize the Neo4jBase object.
+
+        :param uri: The URI of the Neo4j database.
+        :param user: The username to use for the Neo4j connection.
+        :param password: The password to use for the Neo4j connection.
+        """
         self.uri = uri
         self.user = user
         self.password = password
         self.driver = None
 
     def connect_to_neo4j(self) -> None:
+        """
+        Connect to the Neo4j database using the provided credentials.
+        """
         try:
             self.driver = GraphDatabase.driver(
                 self.uri, auth=(self.user, self.password)
@@ -30,6 +49,9 @@ class Neo4jBase:
             ) from e
 
     def close(self) -> None:
+        """
+        Close the Neo4j connection.
+        """
         if self.driver:
             self.driver.close()
             logger.info("Neo4j connection closed successfully.")
@@ -37,7 +59,7 @@ class Neo4jBase:
 
 def create_indexes(driver: Driver) -> None:
     """
-    Creates indexes for the Compound and Gene nodes to optimize queries.
+    Create indexes for the Compound and Gene nodes to optimize queries.
     """
     index_queries = [
         "CREATE INDEX IF NOT EXISTS FOR (c:Compound) ON (c.CompoundName)",
@@ -54,6 +76,13 @@ def create_indexes(driver: Driver) -> None:
 
 
 def execute_query(driver: Driver, query: str) -> List[List[Any]]:
+    """
+    Execute a query against the Neo4j database.
+
+    :param driver: The Neo4j driver object.
+    :param query: The Cypher query to execute.
+    :return: A list of lists containing the results of the query.
+    """
     try:
         with driver.session() as session:
             result = session.run(query)
@@ -64,7 +93,12 @@ def execute_query(driver: Driver, query: str) -> List[List[Any]]:
 
 
 def get_compound_names(driver: Driver) -> List[str]:
-    """Retrieve a list of compound names from the Neo4j database."""
+    """
+    Retrieve a list of compound names from the Neo4j database.
+
+    :param driver: The Neo4j driver object.
+    :return: A list of compound names.
+    """
     query = "MATCH (c:Compound) RETURN c.CompoundName AS name"
 
     # Execute the query and ensure all results are consumed before processing
@@ -77,7 +111,12 @@ def get_compound_names(driver: Driver) -> List[str]:
 
 
 def get_gene_symbols(driver: Driver) -> List[str]:
-    """Retrieve a list of gene symbols from the Neo4j database."""
+    """
+    Retrieve a list of gene symbols from the Neo4j database.
+
+    :param driver: The Neo4j driver object.
+    :return: A list of gene symbols.
+    """
     query = "MATCH (g:Gene) RETURN g.GeneSymbol AS symbol"
 
     # Execute the query and ensure all results are consumed before processing
@@ -92,7 +131,8 @@ def get_gene_symbols(driver: Driver) -> List[str]:
 def get_similar_compounds(driver: Driver, compound_names: List[str]) -> List[List[Any]]:
     """
     Retrieve similar compounds based on a list of compound names.
-    :param driver: Neo4j driver object.
+
+    :param driver: The Neo4j driver object.
     :param compound_names: List of compound names to match.
     :return: List of results, each containing c1, r, and c2.
     """
@@ -109,6 +149,55 @@ def get_similar_compounds(driver: Driver, compound_names: List[str]) -> List[Lis
         result = session.run(query, compound_names=compound_names)
 
         # Fetch all records to consume the result immediately
+        records = result.graph()
+
+    return records
+
+
+def show_bioassays(
+    driver: Driver, compound_names: List[str] = None, gene_symbols: List[str] = None
+) -> List[List[Any]]:
+    """
+    Retrieve BioAssays that have a STUDIES relationship with any Gene in the gene_symbols list
+    and/or BioAssays that have an EVALUATES relationship with any Compound in the compound_names list.
+
+    :param driver: The Neo4j driver object.
+    :param compound_names: List of compound names to match (can be None if not provided).
+    :param gene_symbols: List of gene symbols to match (can be None if not provided).
+    :return: List of results containing BioAssays and their relationships.
+    """
+
+    # Start building the Cypher query based on available input
+    query_parts = []
+    return_elements = ["ba"]  # Always return the BioAssay node
+    params = {}
+
+    if gene_symbols:
+        query_parts.append("""
+        MATCH (ba:BioAssay)-[r1:STUDIES]->(g:Gene)
+        WHERE g.GeneSymbol IN $gene_symbols
+        """)
+        return_elements.extend(["g", "r1"])  # Return gene and STUDIES relationship
+        params["gene_symbols"] = gene_symbols
+
+    if compound_names:
+        query_parts.append("""
+        OPTIONAL MATCH (ba)-[r2:EVALUATES]->(c:Compound)
+        WHERE c.CompoundName IN $compound_names
+        """)
+        return_elements.extend(
+            ["c", "r2"]
+        )  # Return compound and EVALUATES relationship
+        params["compound_names"] = compound_names
+
+    # Combine query parts and return the BioAssay nodes with relationships
+    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
+
+    # Open a session and execute the query
+    with driver.session() as session:
+        result = session.run(query, **params)
+
+        # Fetch all records and return them
         records = result.graph()
 
     return records
