@@ -75,6 +75,16 @@ def apply_custom_styles() -> None:
             color: black !important;  /* Title color */
             text-align: center !important; /* Center the title */
         }
+        
+        /* Change the width of the sidebar */
+        .css-1d391kg {
+            width: 300px;  /* Adjust this to your desired width */
+        }
+
+        /* Change the width of the sidebar's content */
+        .css-1d391kg .css-1lcbmhc {
+            width: 300px;  /* Adjust this to your desired width */
+        }
         </style>
     """,
         unsafe_allow_html=True,
