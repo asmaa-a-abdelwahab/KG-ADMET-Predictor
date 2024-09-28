@@ -12,6 +12,14 @@ services:
       - "7474:7474"  # Neo4j HTTP
       - "7687:7687"  # Neo4j Bolt
 
+  modeling:
+    build: ./modeling
+    container_name: modeling  
+    ports:
+      - "5000:5000" 
+    depends_on:
+      - neo4j
+
   streamlit:
     build: ./streamlit
     container_name: streamlit
@@ -19,8 +27,9 @@ services:
       - "8501:8501"
     depends_on:
       - neo4j         # Ensure Neo4j starts before Streamlit
+      - modeling
     volumes:
-      - ./streamlit:/streamlit          # Mount the Streamlit app code
+      - ../modeling/models:/models          # Mount the Streamlit app code
 
     # environment:
     #   - NEO4J_AUTH=neo4j/cyp450kg  # Replace with your actual password

@@ -13,6 +13,9 @@ __pycache__/
 **/neo4j/logs/
 **/neo4j/conf/
 **/app/models/
+**/modeling/data/
+**/modeling/logs/
+**/modeling/models/
 
 # Log files
 *.log
