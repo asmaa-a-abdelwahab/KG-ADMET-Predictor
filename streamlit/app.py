@@ -8,6 +8,9 @@ from utils.neo4j_utils import (
     get_gene_symbols,
     get_similar_compounds,
     show_bioassays,
+    show_cooccurrence,
+    show_pubchem_interactions,
+    show_external_interactions,
 )
 from utils.visualization_utils import display_graph, display_table
 from utils.ui_utils import display_sidebar, apply_custom_styles
@@ -42,7 +45,7 @@ def main():
         with tab2:
             display_table(result)
 
-    if st.sidebar.button("Show BioAssays"):
+    if st.sidebar.button("Show Related BioAssays"):
         result = show_bioassays(neo4j_conn.driver, selected_compounds)
         with tab1:
             # st.write(result)
@@ -50,6 +53,33 @@ def main():
         with tab2:
             display_table(result)
 
+    if st.sidebar.button("Co-Occurrence in Literature"):
+        result = show_cooccurrence(neo4j_conn.driver, selected_compounds)
+        with tab1:
+            # st.write(result)
+            display_graph(result)
+        with tab2:
+            display_table(result)
+
+    if st.sidebar.button("Compound-Gene Interactions (PubChem)"):
+        result = show_pubchem_interactions(
+            neo4j_conn.driver, selected_compounds, selected_genes
+        )
+        with tab1:
+            # st.write(result)
+            display_graph(result)
+        with tab2:
+            display_table(result)
+
+    if st.sidebar.button("Compound-Gene Interactions (External Sources)"):
+        result = show_external_interactions(
+            neo4j_conn.driver, selected_compounds, selected_genes
+        )
+        with tab1:
+            # st.write(result)
+            display_graph(result)
+        with tab2:
+            display_table(result)
     # Add content for other tabs as necessary
 
     # Close Neo4j connection at the end

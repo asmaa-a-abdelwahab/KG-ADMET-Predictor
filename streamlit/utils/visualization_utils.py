@@ -25,7 +25,7 @@ def extract_graph_data(graph):
     Returns:
         A tuple (nodes, edges) representing the graph.
             - nodes (dict): A dictionary of node IDs to dictionaries of node properties, including labels.
-            - edges (list): A list of tuples containing the start node ID, end node ID, and relationship type.
+            - edges (list): A list of tuples containing the start node ID, end node ID, relationship type, and relationship properties.
     """
     nodes = {}
     edges = []
@@ -46,7 +46,12 @@ def extract_graph_data(graph):
         start_node = rel.start_node.element_id
         end_node = rel.end_node.element_id
         relationship_type = rel.type
-        edges.append((start_node, end_node, relationship_type))
+
+        # Extract relationship properties as a dictionary
+        rel_props = dict(rel)  # Get relationship properties
+
+        # Append the relationship details and properties
+        edges.append((start_node, end_node, relationship_type, rel_props))
 
     return nodes, edges
 
@@ -154,19 +159,21 @@ def display_table(graph):
         if label not in label_groups:
             label_groups[label] = []
         row = {
-            "Node ID": node_id.split(":")[-1]
-        }  # Get just the ID part after the colon
+            "Node ID": node_id.split(":")[-1]  # Get just the ID part after the colon
+        }
         row.update(props)  # Add all node properties (e.g., CompoundName, etc.)
         label_groups[label].append(row)
 
-    # Prepare relationship data for the table
+    # Prepare relationship data for the table, including properties
     relationship_rows = []
-    for start_node, end_node, rel_type in edges:
+    for start_node, end_node, rel_type, rel_props in edges:
         rel_row = {
             "Start Node": start_node.split(":")[-1],
             "End Node": end_node.split(":")[-1],
             "Relationship Type": rel_type,
         }
+        # Include all relationship properties in the table
+        rel_row.update(rel_props)  # Add relationship properties dynamically
         relationship_rows.append(rel_row)
 
     # Display nodes in separate tables for each label

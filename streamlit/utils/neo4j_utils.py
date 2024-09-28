@@ -136,6 +136,10 @@ def get_similar_compounds(driver: Driver, compound_names: List[str]) -> List[Lis
     :param compound_names: List of compound names to match.
     :return: List of results, each containing c1, r, and c2.
     """
+    # compound_names is a required parameter, so raise an error if it's not provided
+    if not compound_names:
+        raise ValueError("compound_names must be provided and cannot be None or empty.")
+
     # Construct the Cypher query with parameters to avoid issues with string formatting
     query = """
     PROFILE MATCH (c1:Compound)-[r:IS_SIMILAR_TO]->(c2:Compound)
@@ -166,6 +170,9 @@ def show_bioassays(
     :param gene_symbols: List of gene symbols to match (can be None if not provided).
     :return: List of results containing BioAssays and their relationships.
     """
+    # Ensure at least one of gene_symbols or compound_names is provided
+    if not (gene_symbols or compound_names):
+        raise ValueError("Either gene_symbols or compound_names must be provided.")
 
     # Start building the Cypher query based on available input
     query_parts = []
@@ -191,6 +198,159 @@ def show_bioassays(
         params["compound_names"] = compound_names
 
     # Combine query parts and return the BioAssay nodes with relationships
+    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
+
+    # Open a session and execute the query
+    with driver.session() as session:
+        result = session.run(query, **params)
+
+        # Fetch all records and return them
+        records = result.graph()
+
+    return records
+
+
+def show_cooccurrence(
+    driver: Driver, compound_names: List[str], gene_symbols: List[str] = None
+) -> List[List[Any]]:
+    """
+    Retrieve the co-occurrence of Compounds with other Compounds and/or Genes in the literature.
+
+    :param driver: The Neo4j driver object.
+    :param compound_names: List of compound names to match.
+    :param gene_symbols: List of gene symbols to match (can be None if not provided).
+    :return: List of results containing co-occurrences.
+    """
+
+    # compound_names is a required parameter, so raise an error if it's not provided
+    if not compound_names:
+        raise ValueError("compound_names must be provided and cannot be None or empty.")
+
+    # Start building the Cypher query based on available input
+    query_parts = []
+    return_elements = ["c1"]  # Always return the Compound node (c1)
+    params = {"compound_names": compound_names}
+
+    # Add co-occurrence between compounds (compound-compound co-occurrence) first
+    query_parts.append("""
+    MATCH (c1:Compound)-[r2:CO_OCCURS_IN_LITERATURE]->(c2:Compound)
+    WHERE c1.CompoundName IN $compound_names
+    """)
+    return_elements.extend(["c2", "r2"])  # Return compound-compound co-occurrence
+
+    # Add co-occurrence between compounds and genes if gene symbols are provided
+    if gene_symbols:
+        query_parts.append("""
+        MATCH (g:Gene)-[r1:CO_OCCURS_IN_LITERATURE]->(c2:Compound)
+        WHERE g.GeneSymbol IN $gene_symbols
+        """)
+        return_elements.extend(
+            ["g", "r1"]
+        )  # Return gene and co-occurrence relationship
+        params["gene_symbols"] = gene_symbols
+
+    # Combine query parts and return the co-occurrence relationships
+    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
+
+    # Open a session and execute the query
+    with driver.session() as session:
+        result = session.run(query, **params)
+
+        # Fetch all records and return them
+        records = result.graph()
+
+    return records
+
+
+def show_pubchem_interactions(
+    driver: Driver, compound_names: List[str], gene_symbols: List[str]
+) -> List[List[Any]]:
+    """
+    Retrieve the interactions between Compounds and Genes, excluding specific non-PubChem relationships.
+
+    :param driver: The Neo4j driver object.
+    :param compound_names: List of compound names to match.
+    :param gene_symbols: List of gene symbols to match.
+    :return: List of results containing co-occurrences.
+    """
+
+    # Ensure gene_symbols are mandatory
+    if not gene_symbols:
+        raise ValueError("gene_symbols must be provided and cannot be None or empty.")
+
+    if not compound_names:
+        raise ValueError("compound_names must be provided and cannot be None or empty.")
+
+    # Start building the Cypher query based on available input
+    query_parts = []
+    return_elements = ["c1", "g", "r2"]  # Return compound, gene, and relationship
+    params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
+    non_pubchem_rel = [
+        "InhibitorORInducerORModulator",
+        "CO_OCCURS_IN_LITERATURE",
+        "INTERACTS_WITH",
+        "InhibitorORSubstrate",
+    ]
+
+    # Add co-occurrence between compounds and genes, excluding specific relationships
+    query_parts.append("""
+    MATCH (c1:Compound)-[r2]->(g:Gene)
+    WHERE c1.CompoundName IN $compound_names 
+    AND g.GeneSymbol IN $gene_symbols
+    AND NOT type(r2) IN $non_pubchem_rel
+    """)
+
+    params["non_pubchem_rel"] = non_pubchem_rel
+
+    # Combine query parts and return the co-occurrence relationships
+    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
+
+    # Open a session and execute the query
+    with driver.session() as session:
+        result = session.run(query, **params)
+
+        # Fetch all records and return them
+        records = result.graph()
+
+    return records
+
+
+def show_external_interactions(
+    driver: Driver, compound_names: List[str], gene_symbols: List[str]
+) -> List[List[Any]]:
+    """
+    Retrieve the interactions between Compounds and Genes from external sources, excluding specific PubChem relationships.
+
+    :param driver: The Neo4j driver object.
+    :param compound_names: List of compound names to match.
+    :param gene_symbols: List of gene symbols to match.
+    :return: List of results containing interactions.
+    """
+
+    # Ensure gene_symbols are mandatory
+    if not gene_symbols:
+        raise ValueError("gene_symbols must be provided and cannot be None or empty.")
+
+    if not compound_names:
+        raise ValueError("compound_names must be provided and cannot be None or empty.")
+
+    # Start building the Cypher query based on available input
+    query_parts = []
+    return_elements = [
+        "c1",
+        "g",
+        "r2",
+    ]  # Return compound name, gene symbol, and relationship
+    params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
+
+    # Add co-occurrence between compounds and genes
+    query_parts.append("""
+    MATCH (c1:Compound)-[r2:INTERACTS_WITH]->(g:Gene)
+    WHERE c1.CompoundName IN $compound_names 
+    AND g.GeneSymbol IN $gene_symbols
+    """)
+
+    # Combine query parts and return the co-occurrence relationships
     query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
 
     # Open a session and execute the query
