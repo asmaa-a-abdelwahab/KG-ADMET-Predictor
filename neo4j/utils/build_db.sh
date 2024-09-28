@@ -43,46 +43,42 @@ fi
 
 echo "Successfully accessed the default database 'neo4j' for project use."
 
-# URLs can be passed via environment variables (set default values if not provided)
-NodesUrl="${NODES_URL:-https://drive.google.com/uc?id=1gfRcd1THN1KqlCB0Wi0i8X-DLjfcJulZ}"
-RelationshipsUrl="${RELATIONSHIPS_URL:-https://drive.google.com/uc?id=1nM8d1TG3-ftKl4EgCs809aqAZUGNdO5O}"
-NodesFile="/cypher/nodes.csv"
-RelationshipsFile="/cypher/relationships.csv"
+# # URLs can be passed via environment variables (set default values if not provided)
+# NodesUrl="${NODES_URL:-https://drive.google.com/uc?id=1gfRcd1THN1KqlCB0Wi0i8X-DLjfcJulZ}"
+# RelationshipsUrl="${RELATIONSHIPS_URL:-https://drive.google.com/uc?id=1nM8d1TG3-ftKl4EgCs809aqAZUGNdO5O}"
+# NodesFile="/cypher/nodes.csv"
+# RelationshipsFile="/cypher/relationships.csv"
 
-# Ensure gdown is installed
-if ! command -v gdown >/dev/null 2>&1; then
-    echo "Error: gdown is not installed. Please install it using 'pip install gdown'." 1>&2
-    exit 1
-fi
+# # Ensure gdown is installed
+# if ! command -v gdown >/dev/null 2>&1; then
+#     echo "Error: gdown is not installed. Please install it using 'pip install gdown'." 1>&2
+#     exit 1
+# fi
 
-# Download nodes and relationships from Google Drive
-echo "Downloading nodes and relationships from Google Drive..." 1>&2
-gdown "$NodesUrl" -O "$NodesFile"
-echo "Finished downloading nodes." 1>&2
-gdown "$RelationshipsUrl" -O "$RelationshipsFile"
-echo "Finished downloading relationships." 1>&2
+# # Download nodes and relationships from Google Drive
+# echo "Downloading nodes and relationships from Google Drive..." 1>&2
+# gdown "$NodesUrl" -O "$NodesFile"
+# echo "Finished downloading nodes." 1>&2
+# gdown "$RelationshipsUrl" -O "$RelationshipsFile"
+# echo "Finished downloading relationships." 1>&2
 
-# Check if the CSV files exist
-if [ ! -f "$NodesFile" ]; then
-    echo "Error: Nodes file not found at $NodesFile." 1>&2
-    exit 1
-fi
+# # Check if the CSV files exist
+# if [ ! -f "$NodesFile" ]; then
+#     echo "Error: Nodes file not found at $NodesFile." 1>&2
+#     exit 1
+# fi
 
-if [ ! -f "$RelationshipsFile" ]; then
-    echo "Error: Relationships file not found at $RelationshipsFile." 1>&2
-    exit 1
-fi
+# if [ ! -f "$RelationshipsFile" ]; then
+#     echo "Error: Relationships file not found at $RelationshipsFile." 1>&2
+#     exit 1
+# fi
 
-# Import nodes and relationships into Neo4j
-log_file="/cypher/import.log"
+# # Import nodes and relationships into Neo4j
+# log_file="/cypher/import.log"
 
-echo "Importing nodes into the Neo4j database..." 1>&2
-python3 "/usr/local/bin/import_nodes.py" >> "$log_file"
-echo "Finished importing nodes." 1>&2
-
-echo "Importing relationships into the Neo4j database..." 1>&2
-python3 "/usr/local/bin/import_relationships.py" >> "$log_file"
-echo "Finished importing relationships." 1>&2
+# echo "Importing data into the Neo4j database..." 1>&2
+# python3 "/usr/local/bin/import_graph_data.py" >> "$log_file"
+# echo "Finished importing data." 1>&2
 
 neo4j stop
 neo4j console

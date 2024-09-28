@@ -51,18 +51,10 @@ def extract_graph_data(graph):
     return nodes, edges
 
 
-# Define a color map for node labels
-def get_label_color(label, label_colors):
-    if label not in label_colors:
-        # Generate a random color for a new label
-        label_colors[label] = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-    return label_colors[label]
-
-
 def display_graph(graph):
     """
     Displays an interactive PyVis graph based on the Neo4j query results, with nodes
-    colored based on their labels.
+    colored based on their labels, and ensures the graph is always centered.
 
     Parameters:
         graph (Graph): Neo4j Graph object containing nodes and relationships.
@@ -72,39 +64,40 @@ def display_graph(graph):
 
     # Create a PyVis network with a white background and black font color
     net = Network(
-        height="100vh",
-        width="100vw",
+        height="850px",
+        width="100%",
         bgcolor="#f9f9f9",
         font_color="black",
     )
 
-    net.show_buttons(filter_=["nodes", "edges", "physics"])
-
-    # Define a dictionary to store colors for each label
-    label_colors = {}
+    # Enable the 'nodes', 'edges', and 'physics' options in the toolbar
+    # net.show_buttons(filter_=["nodes", "edges", "physics"])
 
     # Add nodes to the PyVis network
     for node_id, props in nodes.items():
-        label = props.get("labels", ["Unknown"])[0]  # Get the first label
-        color = get_label_color(
-            label, label_colors
-        )  # Get or assign a color for this label
+        label = props.get("labels", ["Unknown"])[
+            0
+        ]  # Get the first labelGet or assign a color for this label
 
+        # Set node label based on its type
         if label == "Compound":
-            node_label = props.get("CompoundName")  # Set the display name
+            node_label = props.get("CompoundName")
+            color = "#FFA500"
         elif label == "Gene":
             node_label = props.get("GeneSymbol")
+            color = "#0099FF"
         elif label == "BioAssay":
             node_label = props.get("AssayName")
+            color = "#FF3333"
         elif label == "Protein":
             node_label = props.get("ProteinRefSeqAccession")
+            color = "#CCCCCC"
         else:
             node_label = "Unknown"
 
         net.add_node(
             node_id.split(":")[-1],
             title=node_label,
-            # label=node_label,
             color=color,  # Use the color based on the label
         )
 
@@ -116,15 +109,14 @@ def display_graph(graph):
         net.add_edge(start_node, end_node, title=relationship_type)
 
     # Customize the network layout
+    # net.repulsion()
     net.repulsion(
-        node_distance=420,
-        central_gravity=0.33,
-        spring_length=110,
-        spring_strength=0.10,
-        damping=0.95,
+        node_distance=220,  # Reduce the node distance to better fit the screen
+        central_gravity=0.2,  # Increase gravity to make nodes cluster more in the center
+        spring_length=100,
+        spring_strength=0.05,
+        damping=0.8,
     )
-
-    net.set_edge_smooth("dynamic")
 
     # Save the graph as an HTML file
     path = "/tmp"  # or use a relative path for local development
@@ -132,7 +124,9 @@ def display_graph(graph):
 
     # Load and display the HTML file in Streamlit
     HtmlFile = open(f"{path}/pyvis_graph.html", "r", encoding="utf-8")
-    components.html(HtmlFile.read(), width=1172, height=850)
+
+    # Use width '100%' to take the full width of the container
+    components.html(HtmlFile.read(), height=850)
 
 
 def display_table(graph):

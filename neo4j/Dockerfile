@@ -14,8 +14,8 @@ COPY conf/neo4j.conf /var/lib/neo4j/conf/neo4j.conf
 # Copy the Bash scripts and Python scripts to the container
 COPY utils/start_neo4j.sh /usr/local/bin/start_neo4j.sh
 COPY utils/build_db.sh /usr/local/bin/build_db.sh
-COPY utils/import_nodes.py /usr/local/bin/import_nodes.py
-COPY utils/import_relationships.py /usr/local/bin/import_relationships.py
+COPY utils/import_graph_data.py /usr/local/bin/import_graph_data.py
+# COPY utils/import_relationships.py /usr/local/bin/import_relationships.py
 
 # Make the scripts executable
 RUN chmod +x /usr/local/bin/build_db.sh 
@@ -25,9 +25,8 @@ RUN chmod +x /usr/local/bin/build_db.sh
 EXPOSE 7474 7687
 
 # Start Neo4j in console mode to keep the service running in the foreground
-CMD ["sh", "-c", "neo4j console"] 
-# replace console with start and an comment the next line
-# && bash /usr/local/bin/build_db.sh"]
+# CMD ["sh", "-c", "neo4j console"] 
+CMD ["sh", "-c", "neo4j start && bash /usr/local/bin/build_db.sh"]
 
 # RUN bash /usr/local/bin/build_db.sh &
 
