@@ -153,9 +153,7 @@ def display_table(graph):
     # Group nodes by label
     label_groups = {}
     for node_id, props in nodes.items():
-        label = props.get("labels", "Unknown")[
-            0
-        ]  # Assumes 'label' key holds the node label
+        label = props.get("labels")[0]  # Assumes 'label' key holds the node label
         if label not in label_groups:
             label_groups[label] = []
         row = {

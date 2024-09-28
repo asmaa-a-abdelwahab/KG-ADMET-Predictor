@@ -85,6 +85,26 @@ def apply_custom_styles() -> None:
         .css-1d391kg .css-1lcbmhc {
             width: 460px;  /* Adjust this to your desired width */
         }
+
+        /* Custom button styling */
+        .submit-button {
+            background-color: #4CAF50; /* Green */
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            width: 100%; /* Full width */
+            border-radius: 12px; /* Rounded corners */
+        }
+        .submit-button:hover {
+            background-color: #45a049; /* Darker green on hover */
+        }
+        
         </style>
     """,
         unsafe_allow_html=True,
