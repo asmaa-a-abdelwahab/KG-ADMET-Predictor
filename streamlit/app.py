@@ -1,13 +1,3 @@
-# main.py
-
-"""
-Streamlit app for the CYP450-KG project.
-
-This app serves as a frontend for the CYP450-KG knowledge graph and provides
-various visualizations and search functionalities.
-
-"""
-
 import streamlit as st
 from utils.config import (
     NEO4J_URI,
@@ -32,11 +22,6 @@ from utils.ui_utils import display_sidebar, apply_custom_styles
 def main() -> None:
     """
     Main entry point of the Streamlit app.
-
-    This function sets up the Streamlit page config, initializes the Neo4j
-    connection, fetches compound names and gene symbols, renders the sidebar and
-    gets user selections, executes the selected action, and closes the Neo4j
-    connection at the end.
     """
 
     # Set up Streamlit page config
@@ -68,49 +53,48 @@ def main() -> None:
         ],
     )
 
+    # Tabs for visualizing data
     tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Prediction Report"])
 
-    # Add a single submit button
+    # Submit button to trigger the action
     if st.sidebar.button("Submit", key="submit"):
         # Execute based on the selected action
         if action == "Show Similar Compounds":
             result = get_similar_compounds(neo4j_conn.driver, selected_compounds)
-            with tab1:
-                display_graph(result)
-            with tab2:
-                display_table(result)
-
         elif action == "Show Related BioAssays":
             result = show_bioassays(neo4j_conn.driver, selected_compounds)
-            with tab1:
-                display_graph(result)
-            with tab2:
-                display_table(result)
-
         elif action == "Co-Occurrence in Literature":
             result = show_cooccurrence(neo4j_conn.driver, selected_compounds)
-            with tab1:
-                display_graph(result)
-            with tab2:
-                display_table(result)
-
         elif action == "Compound-Gene Interactions (PubChem)":
             result = show_pubchem_interactions(
                 neo4j_conn.driver, selected_compounds, selected_genes
             )
-            with tab1:
-                display_graph(result)
-            with tab2:
-                display_table(result)
-
         elif action == "Compound-Gene Interactions (External Sources)":
             result = show_external_interactions(
                 neo4j_conn.driver, selected_compounds, selected_genes
             )
-            with tab1:
-                display_graph(result)
-            with tab2:
-                display_table(result)
+
+        # Display the results in the appropriate tabs
+        with tab1:
+            display_graph(result)
+        with tab2:
+            display_table(result)
+
+        # GitHub Section with Logo and Hyperlink
+    github_html = """
+    <div style="display: flex; align-items: center; justify-content: center; margin-top: 20px;">
+        <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="text-decoration: none;">
+            <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub Logo" style="width:40px; height:40px; margin-right: 10px;">
+        </a>
+        <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="text-decoration: none;">
+            <p style="font-size: 16px; font-weight: bold; color: black; margin: 0;">@asmaa-a-abdelwahab</p>
+        </a>
+    </div>
+    """
+    # <div style="text-align: center; margin-top: 20px;">
+    #     <p style="font-size: 14px; color: gray;">Check out my GitHub for more projects!</p>
+    # </div>
+    st.sidebar.markdown(github_html, unsafe_allow_html=True)
 
     # Close Neo4j connection at the end
     neo4j_conn.close()

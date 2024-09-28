@@ -59,20 +59,42 @@ class Neo4jBase:
 
 def create_indexes(driver: Driver) -> None:
     """
-    Create indexes for the Compound and Gene nodes to optimize queries.
+    Ensure that all necessary indexes and constraints are created for efficient querying of the Neo4j database.
+    If an index or constraint doesn't exist, it will be created.
     """
     index_queries = [
+        # Indexes for Compound and Gene nodes
         "CREATE INDEX IF NOT EXISTS FOR (c:Compound) ON (c.CompoundName)",
+        "CREATE INDEX IF NOT EXISTS FOR (c:Compound) ON (c.CompoundID)",
+        "CREATE INDEX IF NOT EXISTS FOR (g:Gene) ON (g.GeneID)",
         "CREATE INDEX IF NOT EXISTS FOR (g:Gene) ON (g.GeneSymbol)",
+        # Indexes for BioAssay and Protein nodes
+        "CREATE INDEX IF NOT EXISTS FOR (ba:BioAssay) ON (ba.AssayID)",
+        "CREATE INDEX IF NOT EXISTS FOR (ba:BioAssay) ON (ba.AssayName)",
+        "CREATE INDEX IF NOT EXISTS FOR (p:Protein) ON (p.ProteinRefSeqAccession)",
+    ]
+
+    constraint_queries = [
+        # Constraints to ensure uniqueness of the nodes based on their properties
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Compound) REQUIRE c.CompoundID IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (g:Gene) REQUIRE g.GeneID IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (ba:BioAssay) REQUIRE ba.AssayID IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Protein) REQUIRE p.ProteinRefSeqAccession IS UNIQUE",
     ]
 
     try:
         with driver.session() as session:
+            # Execute index queries
             for query in index_queries:
                 session.run(query)
-                logger.info(f"Index created successfully or already exists: {query}")
+                logger.info(f"Index ensured: {query}")
+
+            # Execute constraint queries
+            for query in constraint_queries:
+                session.run(query)
+                logger.info(f"Constraint ensured: {query}")
     except Exception as e:
-        logger.error(f"Error creating indexes: {e}")
+        logger.error(f"Error creating indexes or constraints: {e}")
 
 
 def execute_query(driver: Driver, query: str) -> List[List[Any]]:

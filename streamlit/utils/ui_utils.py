@@ -15,8 +15,10 @@ def display_sidebar(compound_list, gene_list):
         st.image(PAGE_ICON, width=120, use_column_width=False)
 
     # Sidebar dropdowns
-    selected_compounds = st.sidebar.multiselect("Select Compound/s", compound_list)
-    selected_genes = st.sidebar.multiselect("Select Gene/s", gene_list)
+    selected_compounds = st.sidebar.multiselect(
+        "Select up to 5 Compounds", compound_list, max_selections=5
+    )
+    selected_genes = st.sidebar.multiselect("Select Genes of Interest", gene_list)
 
     return selected_compounds, selected_genes
 
@@ -75,7 +77,18 @@ def apply_custom_styles() -> None:
             color: black !important;  /* Title color */
             text-align: center !important; /* Center the title */
         }
-        
+
+        /* Increase font size for Select Compound/s and Select Gene/s */
+        label[for="Select Compound/s"] {
+            font-size: 30px !important;  /* Increase font size for compound selector */
+            font-weight: bold !important; /* Make the font bold */
+        }
+
+        label[for="Select Gene/s"] {
+            font-size: 30px !important;  /* Increase font size for gene selector */
+            font-weight: bold !important; /* Make the font bold */
+        }
+
         /* Change the width of the sidebar */
         .css-1d391kg {
             width: 460px;  /* Adjust this to your desired width */
@@ -86,26 +99,41 @@ def apply_custom_styles() -> None:
             width: 460px;  /* Adjust this to your desired width */
         }
 
-        /* Custom button styling */
-        .submit-button {
-            background-color: #4CAF50; /* Green */
+        /* Custom submit button styling */
+        div.stButton > button {
+            background-color: #d3d3d3; /* Light gray */
             border: none;
-            color: white;
+            color: black;
             padding: 10px 20px;
             text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
+            display: block;
+            font-size: 30px;
+            margin: 20px 0;
             cursor: pointer;
             width: 100%; /* Full width */
-            border-radius: 12px; /* Rounded corners */
+            border-radius: 5px; /* Rounded corners */
         }
-        .submit-button:hover {
-            background-color: #45a049; /* Darker green on hover */
+        div.stButton > button:hover {
+            background-color: #b0b0b0; /* Darker gray on hover */
+        }
+
+        /* Add margin below gene multi-select */
+        .element-container:nth-of-type(4), .element-container:nth-of-type(6) {
+            margin-bottom: 30px !important;  /* Increase space below the multi-select */
+        }
+        
+        .element-container:nth-of-type(3) {
+            margin-top: 30px !important;
+        }
+        
+        .st-emotion-cache-ue6h4q {
+            font-size: 18px !important;
+        }
+        .sidebar-title {
+            margin-top: 25px !important;
         }
         
         </style>
-    """,
+        """,
         unsafe_allow_html=True,
     )

@@ -29,8 +29,5 @@ services:
       - neo4j         # Ensure Neo4j starts before Streamlit
       - modeling
     volumes:
+      - ./streamlit:/streamlit     
       - ../modeling/models:/models          # Mount the Streamlit app code
-
-    # environment:
-    #   - NEO4J_AUTH=neo4j/cyp450kg  # Replace with your actual password
-    

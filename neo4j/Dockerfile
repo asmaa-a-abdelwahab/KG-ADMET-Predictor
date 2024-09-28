@@ -25,8 +25,8 @@ RUN chmod +x /usr/local/bin/build_db.sh
 EXPOSE 7474 7687
 
 # Start Neo4j in console mode to keep the service running in the foreground
-# CMD ["sh", "-c", "neo4j console"] 
-CMD ["sh", "-c", "neo4j start && bash /usr/local/bin/build_db.sh"]
+CMD ["sh", "-c", "neo4j console"] 
+# CMD ["sh", "-c", "neo4j start && bash /usr/local/bin/build_db.sh"]
 
 # RUN bash /usr/local/bin/build_db.sh &
 

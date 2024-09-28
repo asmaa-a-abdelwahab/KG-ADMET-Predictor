@@ -124,7 +124,7 @@ def display_graph(graph):
     )
 
     # Save the graph as an HTML file
-    path = "/tmp"  # or use a relative path for local development
+    path = "/tmp"  # Adjust the path as needed
     net.save_graph(f"{path}/pyvis_graph.html")
 
     # Load and display the HTML file in Streamlit
@@ -178,11 +178,15 @@ def display_table(graph):
     for label, nodes in label_groups.items():
         st.subheader(f"{label} Nodes")
         node_df = pd.DataFrame(nodes)
+        node_df.replace(r"\\'", "'", regex=True, inplace=True)
+        node_df.replace(r'\\"', '"', regex=True, inplace=True)
         st.dataframe(node_df)
 
     # Convert relationship rows into DataFrame and display it
     if relationship_rows:
         relationship_df = pd.DataFrame(relationship_rows)
+        relationship_df.replace(r"\\'", "'", regex=True, inplace=True)
+        relationship_df.replace(r'\\"', '"', regex=True, inplace=True)
         st.subheader("Relationships Information")
         st.dataframe(relationship_df)
     else:
