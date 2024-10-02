@@ -11,11 +11,16 @@ from utils.neo4j_utils import (
     get_gene_symbols,
     get_similar_compounds,
     show_bioassays,
-    show_cooccurrence,
+    show_cooccurrence_cpd_cpd,
+    show_cooccurrence_cpd_gene,
     show_pubchem_interactions,
     show_external_interactions,
 )
-from utils.visualization_utils import display_graph, display_table
+from utils.visualization_utils import (
+    display_graph,
+    display_table,
+    display_neo4j_statistics,
+)
 from utils.ui_utils import display_sidebar, apply_custom_styles
 
 
@@ -47,7 +52,8 @@ def main() -> None:
         [
             "Show Similar Compounds",
             "Show Related BioAssays",
-            "Co-Occurrence in Literature",
+            "Co-Occurrence in Literature (Compound-Compound)",
+            "Co-Occurrence in Literature (Compound-Gene)",
             "Compound-Gene Interactions (PubChem)",
             "Compound-Gene Interactions (External Sources)",
         ],
@@ -63,8 +69,12 @@ def main() -> None:
             result = get_similar_compounds(neo4j_conn.driver, selected_compounds)
         elif action == "Show Related BioAssays":
             result = show_bioassays(neo4j_conn.driver, selected_compounds)
-        elif action == "Co-Occurrence in Literature":
-            result = show_cooccurrence(neo4j_conn.driver, selected_compounds)
+        elif action == "Co-Occurrence in Literature (Compound-Compound)":
+            result = show_cooccurrence_cpd_cpd(neo4j_conn.driver, selected_compounds)
+        elif action == "Co-Occurrence in Literature (Compound-Gene)":
+            result = show_cooccurrence_cpd_gene(
+                neo4j_conn.driver, selected_compounds, selected_genes
+            )
         elif action == "Compound-Gene Interactions (PubChem)":
             result = show_pubchem_interactions(
                 neo4j_conn.driver, selected_compounds, selected_genes
@@ -80,9 +90,12 @@ def main() -> None:
         with tab2:
             display_table(result)
 
-        # GitHub Section with Logo and Hyperlink
+    with tab1:
+        display_neo4j_statistics(neo4j_conn)
+
+    # GitHub Section with Logo and Hyperlink
     github_html = """
-    <div style="display: flex; align-items: center; justify-content: center; margin-top: 20px;">
+    <div style="display: flex; align-items: center; justify-content: center; margin-top: 10px;">
         <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="text-decoration: none;">
             <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub Logo" style="width:40px; height:40px; margin-right: 10px;">
         </a>

@@ -119,7 +119,7 @@ def apply_custom_styles() -> None:
 
         /* Add margin below gene multi-select */
         .element-container:nth-of-type(4), .element-container:nth-of-type(6) {
-            margin-bottom: 30px !important;  /* Increase space below the multi-select */
+            margin-bottom: 25px !important;  /* Increase space below the multi-select */
         }
         
         .element-container:nth-of-type(3) {

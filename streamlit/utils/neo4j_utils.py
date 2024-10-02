@@ -38,6 +38,7 @@ class Neo4jBase:
         Connect to the Neo4j database using the provided credentials.
         """
         try:
+            logger.info(f"Connecting to Neo4j at {self.uri}")
             self.driver = GraphDatabase.driver(
                 self.uri, auth=(self.user, self.password)
             )
@@ -53,6 +54,7 @@ class Neo4jBase:
         Close the Neo4j connection.
         """
         if self.driver:
+            logger.info("Closing Neo4j connection")
             self.driver.close()
             logger.info("Neo4j connection closed successfully.")
 
@@ -86,13 +88,13 @@ def create_indexes(driver: Driver) -> None:
         with driver.session() as session:
             # Execute index queries
             for query in index_queries:
+                logger.info(f"Ensuring index: {query}")
                 session.run(query)
-                logger.info(f"Index ensured: {query}")
 
             # Execute constraint queries
             for query in constraint_queries:
+                logger.info(f"Ensuring constraint: {query}")
                 session.run(query)
-                logger.info(f"Constraint ensured: {query}")
     except Exception as e:
         logger.error(f"Error creating indexes or constraints: {e}")
 
@@ -106,6 +108,7 @@ def execute_query(driver: Driver, query: str) -> List[List[Any]]:
     :return: A list of lists containing the results of the query.
     """
     try:
+        logger.info(f"Executing query: {query}")
         with driver.session() as session:
             result = session.run(query)
             return result
@@ -125,6 +128,7 @@ def get_compound_names(driver: Driver) -> List[str]:
 
     # Execute the query and ensure all results are consumed before processing
     with driver.session() as session:
+        logger.info("Retrieving compound names")
         result = session.run(query)
         records = result.data()  # Fetch all records as a list of dictionaries
 
@@ -143,6 +147,7 @@ def get_gene_symbols(driver: Driver) -> List[str]:
 
     # Execute the query and ensure all results are consumed before processing
     with driver.session() as session:
+        logger.info("Retrieving gene symbols")
         result = session.run(query)
         records = result.data()  # Fetch all records as a list of dictionaries
 
@@ -170,115 +175,125 @@ def get_similar_compounds(driver: Driver, compound_names: List[str]) -> List[Lis
     RETURN c1, r, c2;
     """
 
+    logger.info("Retrieving similar compounds for %s", compound_names)
+
     # Open a session and execute the query
     with driver.session() as session:
         result = session.run(query, compound_names=compound_names)
-
-        # Fetch all records to consume the result immediately
         records = result.graph()
 
     return records
 
 
-def show_bioassays(
-    driver: Driver, compound_names: List[str] = None, gene_symbols: List[str] = None
-) -> List[List[Any]]:
+def show_bioassays(driver: Driver, compound_names: List[str]) -> List[dict]:
     """
-    Retrieve BioAssays that have a STUDIES relationship with any Gene in the gene_symbols list
-    and/or BioAssays that have an EVALUATES relationship with any Compound in the compound_names list.
+    Retrieve BioAssays that have an EVALUATES relationship with any Compound in the compound_names list.
+
+    This query will return a list of dictionaries, each containing a BioAssay, a Gene, and a Compound, along with
+    their EVALUATES and STUDIES relationships.
 
     :param driver: The Neo4j driver object.
-    :param compound_names: List of compound names to match (can be None if not provided).
-    :param gene_symbols: List of gene symbols to match (can be None if not provided).
-    :return: List of results containing BioAssays and their relationships.
+    :param compound_names: List of compound names to match.
+    :return: List of results containing BioAssays, Genes, and Compounds with their relationships.
     """
-    # Ensure at least one of gene_symbols or compound_names is provided
-    if not (gene_symbols or compound_names):
-        raise ValueError("Either gene_symbols or compound_names must be provided.")
+    # Ensure compound_names is provided
+    if not compound_names:
+        raise ValueError(
+            "You must select compounds to search. Please select one compound for better performance."
+        )
 
-    # Start building the Cypher query based on available input
-    query_parts = []
-    return_elements = ["ba"]  # Always return the BioAssay node
-    params = {}
+    # Cypher query to retrieve BioAssays, Genes, and Compounds based on the compounds in the list
+    query = """
+    MATCH (ba:BioAssay)
+    MATCH (ba)-[r2:EVALUATES]->(c:Compound)
+    MATCH (ba)-[r1:STUDIES]->(g:Gene)
+    WHERE c.CompoundName IN $compound_names
+    RETURN ba, g, r1, c, r2
+    """
 
-    if gene_symbols:
-        query_parts.append("""
-        MATCH (ba:BioAssay)-[r1:STUDIES]->(g:Gene)
-        WHERE g.GeneSymbol IN $gene_symbols
-        """)
-        return_elements.extend(["g", "r1"])  # Return gene and STUDIES relationship
-        params["gene_symbols"] = gene_symbols
+    logger.info("Retrieving BioAssays for %s", compound_names)
 
-    if compound_names:
-        query_parts.append("""
-        OPTIONAL MATCH (ba)-[r2:EVALUATES]->(c:Compound)
-        WHERE c.CompoundName IN $compound_names
-        """)
-        return_elements.extend(
-            ["c", "r2"]
-        )  # Return compound and EVALUATES relationship
-        params["compound_names"] = compound_names
+    # Execute the query with compound_names as a parameter
+    # This query will return a list of dictionaries, each containing a BioAssay, a Gene, and a Compound, along with
+    # their EVALUATES and STUDIES relationships.
+    params = {"compound_names": compound_names}
 
-    # Combine query parts and return the BioAssay nodes with relationships
-    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
-
-    # Open a session and execute the query
     with driver.session() as session:
         result = session.run(query, **params)
-
-        # Fetch all records and return them
         records = result.graph()
 
     return records
 
 
-def show_cooccurrence(
+def show_cooccurrence_cpd_cpd(
     driver: Driver, compound_names: List[str], gene_symbols: List[str] = None
-) -> List[List[Any]]:
+) -> List[dict]:
     """
     Retrieve the co-occurrence of Compounds with other Compounds and/or Genes in the literature.
 
     :param driver: The Neo4j driver object.
     :param compound_names: List of compound names to match.
-    :param gene_symbols: List of gene symbols to match (can be None if not provided).
+    :param gene_symbols: List of gene symbols to match (optional).
     :return: List of results containing co-occurrences.
     """
-
-    # compound_names is a required parameter, so raise an error if it's not provided
+    # Ensure compound_names is provided
     if not compound_names:
-        raise ValueError("compound_names must be provided and cannot be None or empty.")
+        raise ValueError("compound_names must be provided and cannot be empty.")
 
-    # Start building the Cypher query based on available input
-    query_parts = []
-    return_elements = ["c1"]  # Always return the Compound node (c1)
-    params = {"compound_names": compound_names}
-
-    # Add co-occurrence between compounds (compound-compound co-occurrence) first
-    query_parts.append("""
-    MATCH (c1:Compound)-[r2:CO_OCCURS_IN_LITERATURE]->(c2:Compound)
+    query = """
+    MATCH (c1:Compound)-[r1:CO_OCCURS_IN_LITERATURE]->(c2:Compound)
     WHERE c1.CompoundName IN $compound_names
-    """)
-    return_elements.extend(["c2", "r2"])  # Return compound-compound co-occurrence
+    RETURN c1, c2, r1;
+    """
 
-    # Add co-occurrence between compounds and genes if gene symbols are provided
-    if gene_symbols:
-        query_parts.append("""
-        MATCH (g:Gene)-[r1:CO_OCCURS_IN_LITERATURE]->(c2:Compound)
-        WHERE g.GeneSymbol IN $gene_symbols
-        """)
-        return_elements.extend(
-            ["g", "r1"]
-        )  # Return gene and co-occurrence relationship
-        params["gene_symbols"] = gene_symbols
+    params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
 
-    # Combine query parts and return the co-occurrence relationships
-    query = " ".join(query_parts) + f" RETURN {', '.join(return_elements)}"
+    logger.info(
+        "Retrieving co-occurrences between %s and other compounds",
+        compound_names,
+    )
 
-    # Open a session and execute the query
+    with driver.session() as session:
+        result = session.run(query, **params)
+        records = result.graph()
+
+    return records
+
+
+def show_cooccurrence_cpd_gene(
+    driver: Driver, compound_names: List[str], gene_symbols: List[str]
+) -> List[dict]:
+    """
+    Retrieve the co-occurrence of Compounds with Genes in the literature.
+
+    :param driver: The Neo4j driver object.
+    :param compound_names: List of compound names to match.
+    :param gene_symbols: List of gene symbols to match.
+    :return: List of results containing co-occurrences.
+    """
+    # Ensure both compound_names and gene_symbols are provided
+    if not compound_names or not gene_symbols:
+        raise ValueError("Both compound_names and gene_symbols must be provided.")
+
+    query = """
+    MATCH (g:Gene)-[r:CO_OCCURS_IN_LITERATURE]->(c:Compound)
+    WHERE c.CompoundName IN $compound_names
+    AND g.GeneSymbol IN $gene_symbols
+    RETURN c, r, g;
+    """
+
+    params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
+
+    logger.info(
+        "Retrieving co-occurrences between %s and %s",
+        compound_names,
+        gene_symbols,
+    )
+
     with driver.session() as session:
         result = session.run(query, **params)
 
-        # Fetch all records and return them
+        # Extract data from the result
         records = result.graph()
 
     return records
@@ -288,12 +303,12 @@ def show_pubchem_interactions(
     driver: Driver, compound_names: List[str], gene_symbols: List[str]
 ) -> List[List[Any]]:
     """
-    Retrieve the interactions between Compounds and Genes, excluding specific non-PubChem relationships.
+    Retrieve the interactions between Compounds and Genes from PubChem, excluding specific non-PubChem relationships.
 
     :param driver: The Neo4j driver object.
     :param compound_names: List of compound names to match.
     :param gene_symbols: List of gene symbols to match.
-    :return: List of results containing co-occurrences.
+    :return: List of results containing interactions.
     """
 
     # Ensure gene_symbols are mandatory
@@ -305,7 +320,11 @@ def show_pubchem_interactions(
 
     # Start building the Cypher query based on available input
     query_parts = []
-    return_elements = ["c1", "g", "r2"]  # Return compound, gene, and relationship
+    return_elements = [
+        "c1",
+        "g",
+        "r2",
+    ]  # Return compound name, gene symbol, and relationship
     params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
     non_pubchem_rel = [
         "InhibitorORInducerORModulator",
@@ -313,6 +332,13 @@ def show_pubchem_interactions(
         "INTERACTS_WITH",
         "InhibitorORSubstrate",
     ]
+
+    logger.info(
+        "Retrieving interactions between %s and %s, excluding %s",
+        compound_names,
+        gene_symbols,
+        non_pubchem_rel,
+    )
 
     # Add co-occurrence between compounds and genes, excluding specific relationships
     query_parts.append("""
@@ -348,7 +374,6 @@ def show_external_interactions(
     :param gene_symbols: List of gene symbols to match.
     :return: List of results containing interactions.
     """
-
     # Ensure gene_symbols are mandatory
     if not gene_symbols:
         raise ValueError("gene_symbols must be provided and cannot be None or empty.")
@@ -364,6 +389,12 @@ def show_external_interactions(
         "r2",
     ]  # Return compound name, gene symbol, and relationship
     params = {"compound_names": compound_names, "gene_symbols": gene_symbols}
+
+    logger.info(
+        "Retrieving external interactions between %s and %s",
+        compound_names,
+        gene_symbols,
+    )
 
     # Add co-occurrence between compounds and genes
     query_parts.append("""
@@ -383,3 +414,33 @@ def show_external_interactions(
         records = result.graph()
 
     return records
+
+
+def get_neo4j_statistics(driver):
+    """
+    Retrieves statistics from the Neo4j database, including counts of compounds, genes, bioassays, and relationships.
+
+    :param driver: The Neo4j driver object.
+    :return: Dictionary containing the counts of different node and relationship types.
+    """
+    statistics = {}
+
+    queries = {
+        # Count the number of compounds
+        "compounds_count": "MATCH (c:Compound) RETURN COUNT(c) AS count",
+        # Count the number of genes
+        "genes_count": "MATCH (g:Gene) RETURN COUNT(g) AS count",
+        # Count the number of bioassays
+        "bioassays_count": "MATCH (ba:BioAssay) RETURN COUNT(ba) AS count",
+        # Count the number of relationships
+        "relationships_count": "MATCH ()-[r]->() RETURN COUNT(r) AS count",
+    }
+
+    logger.info("Retrieving statistics from Neo4j database")
+
+    with driver.session() as session:
+        for stat_name, query in queries.items():
+            result = session.run(query)
+            statistics[stat_name] = result.single()["count"]
+
+    return statistics

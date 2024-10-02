@@ -1,6 +1,5 @@
 # Python virtual environment
-KG-ADMET-PREDICTOR/
-data_analysis/
+**/KG-ADMET-PREDICTOR/
 .env/
 
 # Byte-compiled Python files
