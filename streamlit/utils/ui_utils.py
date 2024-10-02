@@ -113,10 +113,11 @@ def apply_custom_styles() -> None:
             width: 100%; /* Full width */
             border-radius: 5px; /* Rounded corners */
         }
-        div.stButton > button:hover {
+        
+        div.download_button > button:hover {
             background-color: #b0b0b0; /* Darker gray on hover */
         }
-
+        
         /* Add margin below gene multi-select */
         .element-container:nth-of-type(4), .element-container:nth-of-type(6) {
             margin-bottom: 25px !important;  /* Increase space below the multi-select */

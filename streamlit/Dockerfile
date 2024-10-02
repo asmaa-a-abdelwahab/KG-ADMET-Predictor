@@ -19,7 +19,7 @@ RUN pip install -U pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install nano text editor to be able to edit the code in the container
-RUN apt-get update && apt-get install nano -y && pip3 install neo4j
+RUN apt-get update && apt-get install nano wkhtmltopdf -y && pip3 install neo4j
 
 # Set the default command for the container to run the Streamlit app
 CMD streamlit run app.py

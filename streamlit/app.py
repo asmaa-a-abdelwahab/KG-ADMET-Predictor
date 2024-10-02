@@ -20,6 +20,7 @@ from utils.visualization_utils import (
     display_graph,
     display_table,
     display_neo4j_statistics,
+    display_report,
 )
 from utils.ui_utils import display_sidebar, apply_custom_styles
 
@@ -60,7 +61,7 @@ def main() -> None:
     )
 
     # Tabs for visualizing data
-    tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Prediction Report"])
+    tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Summary Report"])
 
     # Submit button to trigger the action
     if st.sidebar.button("Submit", key="submit"):
@@ -89,6 +90,8 @@ def main() -> None:
             display_graph(result)
         with tab2:
             display_table(result)
+        with tab3:
+            display_report(action, result)
 
     with tab1:
         display_neo4j_statistics(neo4j_conn)

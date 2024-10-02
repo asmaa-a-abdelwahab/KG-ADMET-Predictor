@@ -7,7 +7,11 @@ Functions:
     - display_table: Displays the Neo4j Graph result as a table, including nodes and relationships.
 """
 
+import os
+from io import BytesIO
+
 import pandas as pd
+import pdfkit
 from pyvis.network import Network
 
 import streamlit as st
@@ -329,6 +333,236 @@ def display_table(graph):
         st.dataframe(relationship_df)
     else:
         st.info("No relationships to display.")
+
+
+def group_by_start_node(list_of_relationships):
+    """
+    Divides the list of relationships into multiple lists where each sublist
+    contains relationships with the same start_node_info (first list element).
+
+    Parameters:
+        list_of_relationships: List of lists in the form [start_node_info, end_node_info, relationship_type, rel_props]
+
+    Returns:
+        A list of lists, where each inner list contains sublists that share the same start_node_info.
+    """
+    grouped_relationships = []
+    processed_start_nodes = []
+
+    # Iterate through the list of relationships
+    for relationship in list_of_relationships:
+        start_node_info = relationship[0]
+
+        # Check if this start_node_info has already been processed
+        if start_node_info not in processed_start_nodes:
+            # Group all relationships with the same start_node_info
+            group = [rel for rel in list_of_relationships if rel[0] == start_node_info]
+            grouped_relationships.append(group)
+            processed_start_nodes.append(start_node_info)
+
+    return grouped_relationships
+
+
+def download_html_as_pdf(html_content: str, output_file: str):
+    """
+    Converts HTML content to a PDF using pdfkit.
+
+    :param html_content: HTML content as a string.
+    :param output_file: The name of the output PDF file.
+    """
+    pdfkit.from_string(html_content, output_file)
+
+
+def display_report(action, graph):
+    """
+    Generates and displays a summary HTML report from the extracted graph data,
+    focusing on relationships and retrieving important node information.
+
+    Parameters:
+        graph: The Neo4j graph object with nodes and relationships.
+    """
+    # Extract nodes and edges from the graph using the provided function
+    nodes, edges = extract_graph_data(graph)
+
+    # Helper function to retrieve important node information
+    def get_node_info(node_id):
+        """
+        Retrieves important information about a node based on its ID.
+
+        Parameters:
+            node_id (str): The ID of the node to retrieve information for.
+
+        Returns:
+            A list containing the node ID, label, name, and properties.
+                - node_id (str): The ID of the node.
+                - label (str): The label of the node (e.g. Compound, Gene, etc.).
+                - name (str): The name of the node (e.g. CompoundName, GeneSymbol, etc.).
+                - props (dict): The properties of the node.
+        """
+        props = nodes.get(node_id, {})
+        label = props.get("labels", ["Unknown"])[0]
+
+        # Retrieve the name of the node based on its label
+        if label == "Compound":
+            name = props.get("CompoundName", "N/A")
+        elif label == "Gene":
+            name = props.get("GeneSymbol", "N/A")
+        elif label == "BioAssay":
+            name = props.get("AssayName", "N/A")
+        else:
+            name = "N/A"  # Default case if label doesn't match
+
+        return [node_id, label, name, props]
+
+    # Prepare content for relationships (edges) and associated node information
+    relationships_info = []
+    compound_info = {}  # To store compound details for the table, without repetition
+    all_props = set()  # To gather all unique property names
+
+    for edge in edges:
+        start_node = edge[0]
+        end_node = edge[1]
+        relationship_type = edge[2]
+        rel_props = edge[3]
+
+        # Retrieve important information for the nodes involved
+        start_node_info = get_node_info(start_node)
+        end_node_info = get_node_info(end_node)
+
+        # Add start node and end node to relationships
+        relationships_info.append(
+            [start_node_info, end_node_info, relationship_type, rel_props]
+        )
+
+        # Add compounds to compound_info without repeating
+        if start_node_info[1] == "Compound":
+            compound_info[start_node_info[2]] = start_node_info[3]
+            all_props.update(
+                key for key in start_node_info[3].keys() if key != "CompoundName"
+            )
+
+        if end_node_info[1] == "Compound":
+            compound_info[end_node_info[2]] = end_node_info[3]
+            all_props.update(
+                key for key in end_node_info[3].keys() if key != "CompoundName"
+            )
+
+    # Generate the HTML for compound summary tables for each group of nodes
+    grouped_relationships = group_by_start_node(relationships_info)
+
+    relationships_html = ""
+    for group in grouped_relationships:
+        start_node_info = group[0][0]  # Get the first relationship's start node info
+        relationships_html += f"<h2 style='text-align: left;'>Similar Compounds to {start_node_info[2]}:</h2><ol>"
+        for rel in group:
+            relationships_html += f"<li>{rel[1][2]}</li>"  # rel[1][2] corresponds to the end node's name (CompoundName)
+        relationships_html += "</ol>"
+
+        # Generate compound summary table for each group
+        table_html = "<table border='1' style='width:100%; border-collapse: collapse; word-wrap: break-word; table-layout: fixed;'>"
+
+        # Create the header with compound names
+        compound_names = list({start_node_info[2]} | {rel[1][2] for rel in group})
+        table_html += (
+            "<tr><th style='width: 200px;'>Property</th>"
+            + "".join([f"<th>{name}</th>" for name in compound_names])
+            + "</tr>"
+        )
+
+        # Populate the table by iterating over the properties and filling columns with the corresponding values for each compound
+        for prop in all_props:
+            row_html = f"<td>{prop}</td>"  # First column with property name
+            for compound_name in compound_names:
+                compound_props = compound_info.get(compound_name, {})
+                value = compound_props.get(
+                    prop, "N/A"
+                )  # Get the property value or "N/A"
+                row_html += f"<td>{value}</td>"
+            table_html += f"<tr>{row_html}</tr>"
+
+        table_html += "</table>"
+
+        relationships_html += (
+            f"<h2 style='text-align: left;'>Compounds Summary Table</h2>{table_html}"
+        )
+
+    # Combine the HTML report content
+    report_html = f"""
+    <html>
+    <head>
+        <title>CYP450-KG Summary Report</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; padding: 20px; }}
+            h1, h2, h5 {{ text-align: center; }}
+            table {{ width: 100%; border-collapse: collapse; word-wrap: break-word; table-layout: fixed; }}
+            th, td {{ padding: 10px; border: 1px solid #dddddd; text-align: left; }}
+            ul {{ list-style-type: none; padding-left: 0; }}
+        </style>
+    </head>
+    <body>
+        <h1>CYP450-KG Summary Report</h1>
+        {relationships_html}
+    </body>
+    </html>
+    """
+
+    # elif action == "Show Related BioAssays":
+    # elif action == "Co-Occurrence in Literature (Compound-Compound)":
+    # elif action == "Co-Occurrence in Literature (Compound-Gene)":
+
+    # elif action == "Compound-Gene Interactions (PubChem)":
+
+    # elif action == "Compound-Gene Interactions (External Sources)":
+    #     relationship_info = f"<h5>{start_node_info} -- studies --> </h5><h5>{end_node_info}</h5>"
+
+    # Create a simple HTML structure for the report
+
+    # Display the report in a new tab in Streamlit
+    st.markdown(report_html, unsafe_allow_html=True)
+
+    # Generate PDF from the report content
+    download_html_as_pdf(report_html, "./CYP450-KG_Summary_Report.pdf")
+
+    pdf_path = "./CYP450-KG_Summary_Report.pdf"
+    # Read the PDF file into memory as bytes
+    with open(pdf_path, "rb") as pdf_file:
+        pdf_data = pdf_file.read()
+
+    os.remove(pdf_path)
+
+    # Provide the option to download the PDF in Streamlit
+    st.markdown(
+        """
+        <style>
+        /* Style the download button */
+        div.stDownloadButton > button {
+            background-color: #f0f0f0; /* Light gray */
+            color: black; /* Button text color */
+            border: 1px solid #d0d0d0; /* Border color */
+            padding: 8px 20px; /* Padding */
+            border-radius: 5px; /* Rounded corners */
+            width: 100%; /* Full width */
+            font-size: 24px; /* Font size */
+            font-family: 'Arial', sans-serif; /* Font family */
+        }
+
+        /* Style the hover effect for the download button */
+        div.stDownloadButton > button:hover {
+            background-color: #b0b0b0; /* Darker gray on hover */
+            color: white; /* Text color on hover */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Display the download button
+    st.download_button(
+        label="Download PDF Report",
+        data=pdf_data,
+        file_name="CYP450-KG_Summary_Report.pdf",
+        mime="application/pdf",
+    )
 
 
 def display_neo4j_statistics(neo4j_conn):
