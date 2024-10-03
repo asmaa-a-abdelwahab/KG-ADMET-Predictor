@@ -556,13 +556,17 @@ def display_report(action, graph):
         unsafe_allow_html=True,
     )
 
-    # Display the download button
-    st.download_button(
-        label="Download PDF Report",
-        data=pdf_data,
-        file_name="CYP450-KG_Summary_Report.pdf",
-        mime="application/pdf",
-    )
+    @st.fragment
+    def fragment_function():
+        # Display the download button
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_data,
+            file_name="CYP450-KG_Summary_Report.pdf",
+            mime="application/pdf",
+        )
+
+    fragment_function()
 
 
 def display_neo4j_statistics(neo4j_conn):

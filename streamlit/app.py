@@ -87,11 +87,29 @@ def main() -> None:
 
         # Display the results in the appropriate tabs
         with tab1:
-            display_graph(result)
+
+            @st.fragment
+            def fragment_function():
+                # Display the download button
+                display_graph(result)
+
+            fragment_function()
         with tab2:
             display_table(result)
         with tab3:
             display_report(action, result)
+    else:
+        with tab1:
+            st.markdown(
+                """
+                <div style="text-align: center; margin-top: 10px;">
+                    <h2>Welcome to the CYP450 Knowledge Graph Application!</h2>
+                </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+            st.video("images/SampleVideo_1280x720_1mb.mp4", format="video/mp4")
 
     with tab1:
         display_neo4j_statistics(neo4j_conn)
@@ -111,6 +129,30 @@ def main() -> None:
     #     <p style="font-size: 14px; color: gray;">Check out my GitHub for more projects!</p>
     # </div>
     st.sidebar.markdown(github_html, unsafe_allow_html=True)
+
+    # Sidebar content
+    # st.sidebar.markdown("### Interested in Building the Neo4j Database?")
+
+    # Attractive note with a link to your package
+    st.sidebar.markdown(
+        """
+        <div style="background-color: #f0f0f0; padding: 10px; border-radius: 5px; text-align: center; margin-top: 30px;">
+            <p style="font-size: 14px; color: #333;">
+                Learn how to build a comprehensive Neo4j database from scratch 
+                using automated interaction data retrieval from PubChem with 
+                my Python package!
+            </p>
+            <p style="font-size: 14px; color: #333;">
+                Check out my package 
+                <a href="https://github.com/asmaa-a-abdelwahab/ChemGraphBuilder" 
+                style="color: #ff4b4b; text-decoration: none; font-weight: bold;">
+                ChemGraphBuilder
+                </a> to get started!
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Close Neo4j connection at the end
     neo4j_conn.close()
