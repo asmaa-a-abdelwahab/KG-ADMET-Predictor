@@ -1,28 +1,96 @@
 # Python virtual environment
 **/KG-ADMET-PREDICTOR/
 .env/
-**/volumes/
+**/venv/
+**/.venv/
+
+# Docker-related files and volumes
+**/volumes/neo4j-data/
+**/volumes/neo4j-cypher/
+**/volumes/neo4j-logs/
+**/neo4j/data/
+**/neo4j/logs/
+**/neo4j/cypher/
+**/neo4j/conf/
+
+# Application-related directories (models, data, logs)
+**/app/models/
+**/modeling/data/
+**/modeling/logs/
+**/modeling/models/
+**/streamlit/lib/
+**/streamlit/models/
 
 # Byte-compiled Python files
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
-# Docker-related files
-**/neo4j/data/
-**/neo4j/logs/
-**/neo4j/conf/
-**/app/models/
-**/modeling/data/
-**/modeling/logs/
-**/modeling/models/
+# Environment and sensitive configuration
+.env
+*.env
 
-# Log files
+# Logs
 *.log
+*.log.*
 
-# OS generated files
+# OS-generated files and directories
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
 
-# Ignore sensitive environment configuration
-.env
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE or Editor specific files
+.idea/
+.vscode/
+*.code-workspace
+
+# Test and coverage files
+coverage/
+*.coverage
+htmlcov/
+*.pytest_cache/
+.tox/
+.cache/
+nose2-*.xml
+
+# Build and distribution files
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Temporary files and folders
+*.tmp
+*.temp
+*.pid
+*.seed
+*.manifest
+*.spec
+
+# Ignore common dependency directories
+node_modules/
+bower_components/
+target/
+lib/
+bin/
+obj/
+
+# Ignore containerization files
+.docker/
+.dockerignore
+Dockerfile
+Dockerfile.*
+
+# Exclude personal or unnecessary files
+*.iml
+*.log/
+*.session
+*.lock
