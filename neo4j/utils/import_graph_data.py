@@ -10,7 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 nodes_file = "/cypher/nodes.csv"  # Adjust the path if necessary
 relationships_file = "/cypher/relationships.csv"
 batch_size = 5000  # Adjust based on performance testing
-max_workers = 15  # Number of parallel workers for executing batches
+max_workers = min(
+    os.cpu_count() - 1, 8
+)  # Number of parallel workers for executing batches
 
 # Dictionary to store node properties based on node ID
 node_mapping = {}
@@ -107,7 +109,7 @@ def import_nodes(nodes_file, batch_size):
                         for key, value in properties.items()
                     ]
                 )
-                cypher_query = f"CREATE (n:{labels} {{{properties_string}}});"
+                cypher_query = f"MERGE (n:{labels} {{{properties_string}}});"
                 batch.append(cypher_query)
                 # print(cypher_query)
 
@@ -159,7 +161,7 @@ def import_relationships(relationships_file, batch_size):
     Reads a CSV file with relationship data and imports it into Neo4j using
     Cypher queries in batches.
     """
-    with open(relationships_file, "r") as file:
+    with open(relationships_file, "r", encoding="utf-8", errors="replace") as file:
         reader = csv.DictReader(file)
         batch = []
         count = 0
@@ -168,6 +170,9 @@ def import_relationships(relationships_file, batch_size):
             futures = []
 
             for row in reader:
+                if any("\0" in value for value in row.values()):
+                    print(f"Skipping row {count} with NUL byte.")
+                    continue
                 count += 1
 
                 try:
@@ -204,7 +209,7 @@ def import_relationships(relationships_file, batch_size):
                 cypher_query = f"""
                 {start_match}
                 {end_match}
-                CREATE (a)-[r:{rel_type} {{{properties_string}}}]->(b);
+                MERGE (a)-[r:{rel_type} {{{properties_string}}}]->(b);
                 """
                 # print(cypher_query)
                 batch.append(cypher_query)

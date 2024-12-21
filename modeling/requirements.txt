@@ -1,0 +1,8 @@
+neo4j
+torch-geometric
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+-f https://data.pyg.org/whl/torch-2.0.0+cu117.html
+dgl

@@ -1,6 +1,7 @@
 # Python virtual environment
 **/KG-ADMET-PREDICTOR/
 .env/
+**/volumes/
 
 # Byte-compiled Python files
 __pycache__/

@@ -7,6 +7,7 @@ from utils.config import (
 )
 from utils.neo4j_utils import (
     Neo4jBase,
+    create_indexes,
     get_compound_names,
     get_gene_symbols,
     get_similar_compounds,
@@ -39,6 +40,8 @@ def main() -> None:
     # Initialize Neo4j connection
     neo4j_conn = Neo4jBase(uri=NEO4J_URI, user=NEO4J_USER, password=NEO4J_PASSWORD)
     neo4j_conn.connect_to_neo4j()
+
+    create_indexes(neo4j_conn.driver)
 
     # Fetch compound names and gene symbols
     compound_list = get_compound_names(neo4j_conn.driver)
@@ -116,7 +119,7 @@ def main() -> None:
 
     # GitHub Section with Logo and Hyperlink
     github_html = """
-    <div style="display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+    <div style="display: flex; align-items: center; justify-content: center;">
         <a href="https://github.com/asmaa-a-abdelwahab" target="_blank" style="text-decoration: none;">
             <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub Logo" style="width:40px; height:40px; margin-right: 10px;">
         </a>
@@ -136,7 +139,7 @@ def main() -> None:
     # Attractive note with a link to your package
     st.sidebar.markdown(
         """
-        <div style="background-color: #f0f0f0; padding: 10px; border-radius: 5px; text-align: center; margin-top: 30px;">
+        <div style="background-color: #f0f0f0; padding: 10px; border-radius: 5px; text-align: center; margin-top: 10px;">
             <p style="font-size: 14px; color: #333;">
                 Learn how to build a comprehensive Neo4j database from scratch 
                 using automated interaction data retrieval from PubChem with 

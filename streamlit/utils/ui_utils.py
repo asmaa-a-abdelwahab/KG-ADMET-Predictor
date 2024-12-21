@@ -108,7 +108,6 @@ def apply_custom_styles() -> None:
             text-align: center;
             display: block;
             font-size: 30px;
-            margin: 20px 0;
             cursor: pointer;
             width: 100%; /* Full width */
             border-radius: 5px; /* Rounded corners */

@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
 
 # Set the working directory in the container
 WORKDIR /modeling
@@ -10,8 +10,8 @@ COPY requirements.txt ./
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the current directory contents into the container at /app
+# Copy the current directory contents into the container at /modeling
 COPY . .
 
-# Run the shell script to start the modeling container
-CMD ["bash", "scripts/start_modeling.sh"]
+# Keep the container running by opening a shell
+CMD ["tail", "-f", "/dev/null"]
