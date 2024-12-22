@@ -1,32 +1,36 @@
 # Use the official Neo4j image
 FROM neo4j:latest
 
-# Install Python3, pip3, wget, curl, and nano
+# Install utilities
 RUN apt-get update && apt-get install -y python3 python3-pip wget curl nano && \
     pip3 install gdown
 
-# Create directories and set ownership for Neo4j data and custom scripts
-RUN mkdir -p /cypher && chown -R neo4j:neo4j /cypher
+# Create necessary directories
+# # RUN mkdir -p /cypher /plugins && chown -R neo4j:neo4j /cypher /plugins
+# RUN mkdir -p /plugins && chown -R neo4j:neo4j /plugins
 
-# Copy the Neo4j configuration file
+# # Download APOC plugin
+# COPY ./plugins/apoc-5.26.0-extended.jar /plugins/apoc-5.26.0-extended.jar
+# RUN chown -R neo4j:neo4j /plugins
+
+# Copy custom Neo4j configuration
 COPY conf/neo4j.conf /var/lib/neo4j/conf/neo4j.conf
 RUN chown neo4j:neo4j /var/lib/neo4j/conf/neo4j.conf
 
-# Copy the Bash and Python scripts
+# Copy utility scripts
 COPY utils/start_neo4j.sh /usr/local/bin/start_neo4j.sh
 COPY utils/build_db.sh /usr/local/bin/build_db.sh
 COPY utils/import_graph_data.py /usr/local/bin/import_graph_data.py
 RUN chmod +x /usr/local/bin/*.sh
 
-# Expose ports for Neo4j
+# Expose Neo4j ports
 EXPOSE 7474 7687
 
-# Use volumes to persist data
-VOLUME /data
-VOLUME /logs
-
-# Default command to start Neo4j
+# Default command
 CMD ["sh", "-c", "neo4j console"]
+
+
+
 
 
 

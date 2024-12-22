@@ -1,3 +1,4 @@
+pandas
 neo4j
 torch-geometric
 torch-scatter
