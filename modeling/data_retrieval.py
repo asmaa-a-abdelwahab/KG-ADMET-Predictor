@@ -23,8 +23,8 @@ def retrieve_and_process_data(driver: Driver) -> None:
     export_query = """
     CALL apoc.export.csv.query(
         'MATCH (c:Compound)-[r]->(g:Gene)
-         WHERE g.GeneSymbol IN ["CYP1A2", "CYP2C9", "CYP2C19", "CYP2D6", "CYP3A4", "CYP2E1", "CYP3A5"]
-         RETURN c AS Compound, g AS Gene, type(r) AS InteractionType',
+        WHERE g.GeneSymbol IN ["CYP1A2", "CYP2C9", "CYP2C19", "CYP2D6", "CYP3A4", "CYP2E1", "CYP3A5"]
+        RETURN c AS Compound, g AS Gene, type(r) AS InteractionType, properties(r) AS InteractionProperties',
         "compound_gene_interactions.csv",
         {batchSize: 10000, delimiter: ","}
     ) YIELD file, rows, done;
@@ -46,7 +46,7 @@ def retrieve_and_process_data(driver: Driver) -> None:
 
                 # Load the exported CSV file
                 logger.info("Loading exported data...")
-                df = pd.read_csv(csv_path)
+                df = pd.read_csv("/import/compound_gene_interactions.csv")
 
                 # Process the data
                 logger.info("Processing data...")
@@ -56,6 +56,7 @@ def retrieve_and_process_data(driver: Driver) -> None:
                     compound = json.loads(row["Compound"])
                     gene = json.loads(row["Gene"])
                     interaction_type = row["InteractionType"]
+                    interaction_properties = json.loads(row["InteractionProperties"])
 
                     # Extract all properties from Compound and Gene
                     compound_properties = compound.get("properties", {})
@@ -70,6 +71,10 @@ def retrieve_and_process_data(driver: Driver) -> None:
                             for key, value in gene_properties.items()
                         },
                         "InteractionType": interaction_type,
+                        **{
+                            f"Interaction_{key}": value
+                            for key, value in interaction_properties.items()
+                        },
                     }
                     processed_data.append(processed_row)
 
@@ -77,7 +82,7 @@ def retrieve_and_process_data(driver: Driver) -> None:
                 processed_df = pd.DataFrame(processed_data)
 
                 # Save the processed data to a new CSV file
-                processed_file_path = "/data/processed/compound_gene_interactions.csv"
+                processed_file_path = "/import/processed_compound_gene_interactions.csv"
                 logger.info(f"Saving processed data to {processed_file_path}...")
                 processed_df.to_csv(processed_file_path, index=False)
                 logger.info(

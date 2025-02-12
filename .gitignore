@@ -3,6 +3,7 @@
 .env/
 **/venv/
 **/.venv/
+**/import/
 
 # Docker-related files and volumes
 **/volumes/neo4j-data/
