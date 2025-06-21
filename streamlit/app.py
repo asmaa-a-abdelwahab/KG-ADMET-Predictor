@@ -62,6 +62,7 @@ def main() -> None:
             "Compound-Gene Interactions (External Sources)",
         ],
     )
+    st.sidebar.markdown("""\n\n\n\n\n\n\n\n""", unsafe_allow_html=True)
 
     # Tabs for visualizing data
     tab1, tab2, tab3 = st.tabs(["Knowledge Graph", "Tabular Data", "Summary Report"])
@@ -131,6 +132,7 @@ def main() -> None:
     # <div style="text-align: center; margin-top: 20px;">
     #     <p style="font-size: 14px; color: gray;">Check out my GitHub for more projects!</p>
     # </div>
+    st.sidebar.markdown("""\n\n\n\n\n\n\n\n""", unsafe_allow_html=True)
     st.sidebar.markdown(github_html, unsafe_allow_html=True)
 
     # Sidebar content

@@ -1,18 +1,41 @@
 # ui_components.py
-
+import base64
 import streamlit as st
 from utils.config import PAGE_ICON
 
 
 def display_sidebar(compound_list, gene_list):
     # Sidebar title
+    file_ = open(PAGE_ICON, "rb").read()
+    base64_image = base64.b64encode(file_).decode("utf-8")
     st.sidebar.markdown(
-        '<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True
+        f"""
+        <div style="display: flex; align-items: center; justify-content: center; padding-bottom: 10px;">
+            <!-- Logo -->
+            <div style="display: flex; align-items: center; margin-right: 10px;">
+                <img src="data:image/png;base64,{base64_image}" alt="Logo" width="100" style="border-radius: 5px;">
+            </div>
+            <!-- Separator -->
+            <div style="width: 4px; height: 50px; background-color: #ccc; margin-right: 10px;"></div>
+            <!-- Text -->
+            <div style="font-size: 34px; font-weight: bold; color: #112f5f;">
+                CYP450-KG
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+    st.sidebar.markdown(
+        """<br>""",
+        unsafe_allow_html=True,
+    )
+    # st.sidebar.markdown(
+    #     '<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True
+    # )
 
-    col1, col2, col3 = st.sidebar.columns([1, 1, 1])
-    with col2:
-        st.image(PAGE_ICON, width=120, use_column_width=False)
+    # col1, col2, col3 = st.sidebar.columns([1, 1, 1])
+    # with col2:
+    #     st.image(PAGE_ICON, width=120, use_column_width=False)
 
     # Sidebar dropdowns
     selected_compounds = st.sidebar.multiselect(
