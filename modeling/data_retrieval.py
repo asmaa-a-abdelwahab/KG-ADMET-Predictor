@@ -8,7 +8,6 @@ from utils.neo4j_utils import (
     Neo4jBase,
 )
 from neo4j import Driver
-
 import pandas as pd
 import json
 

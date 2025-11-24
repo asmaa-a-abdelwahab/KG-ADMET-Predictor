@@ -163,6 +163,139 @@ def display_graph(graph):
         spring_strength=0.05,
         damping=0.8,
     )
+    
+    net.set_options("""
+    var options = {
+      "interaction": {
+        "hover": true,
+        "navigationButtons": true,
+        "keyboard": {
+          "enabled": true,
+          "bindToWindow": true
+        },
+        "dragNodes": true,
+        "dragView": true,
+        "zoomView": true
+      }
+    }
+    """)
+
+    style = """
+    <style>
+    /* Base style for nav + manipulation buttons */
+    .vis-network .vis-navigation .vis-button,
+    .vis-network .vis-manipulation .vis-button {
+        position: relative;
+        background-color: #f3f4f6 !important;   /* light grey */
+        border: 1px solid #d1d5db !important;   /* soft grey border */
+        border-radius: 6px !important;
+        background-image: none !important;      /* remove default green icon */
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+        width: 28px !important;
+        height: 28px !important;
+    }
+
+    /* Generic icon base (we'll override per button) */
+    .vis-network .vis-navigation .vis-button::after,
+    .vis-network .vis-manipulation .vis-button::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+    }
+
+    /* ----- ARROWS ----- */
+
+    /* Up arrow */
+    .vis-network .vis-navigation .vis-button.vis-up::after {
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 0 6px 8px 6px;
+        border-color: transparent transparent #4b5563 transparent;
+    }
+
+    /* Down arrow */
+    .vis-network .vis-navigation .vis-button.vis-down::after {
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 8px 6px 0 6px;
+        border-color: #4b5563 transparent transparent transparent;
+    }
+
+    /* Left arrow */
+    .vis-network .vis-navigation .vis-button.vis-left::after {
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 6px 8px 6px 0;
+        border-color: transparent #4b5563 transparent transparent;
+    }
+
+    /* Right arrow */
+    .vis-network .vis-navigation .vis-button.vis-right::after {
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 6px 0 6px 8px;
+        border-color: transparent transparent transparent #4b5563;
+    }
+
+    /* ----- ZOOM BUTTONS ----- */
+
+    /* Zoom in: plus sign */
+    .vis-network .vis-navigation .vis-button.vis-zoomIn::after {
+        width: 12px;
+        height: 12px;
+    }
+    .vis-network .vis-navigation .vis-button.vis-zoomIn::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 10px;
+        height: 2px;
+        background-color: #4b5563;              /* horizontal bar */
+        transform: translate(-50%, -50%);
+    }
+    .vis-network .vis-navigation .vis-button.vis-zoomIn::after {
+        background-color: #4b5563;              /* vertical bar */
+        width: 2px;
+        height: 10px;
+    }
+
+    /* Zoom out: minus sign */
+    .vis-network .vis-navigation .vis-button.vis-zoomOut::after {
+        width: 10px;
+        height: 2px;
+        background-color: #4b5563;
+    }
+
+    /* Fit / zoomExtends: small square */
+    .vis-network .vis-navigation .vis-button.vis-zoomExtends::after {
+        width: 12px;
+        height: 12px;
+        border: 2px solid #4b5563;
+        border-radius: 2px;
+        background: transparent;
+    }
+
+    /* Hover + active: subtle blue accent */
+    .vis-network .vis-navigation .vis-button:hover,
+    .vis-network .vis-manipulation .vis-button:hover {
+        background-color: #e5e7eb !important;   /* slightly darker grey */
+        border-color: #2563eb !important;       /* blue accent */
+    }
+
+    .vis-network .vis-navigation .vis-button:active,
+    .vis-network .vis-manipulation .vis-button:active {
+        background-color: #dbeafe !important;   /* very light blue */
+        border-color: #1d4ed8 !important;
+    }
+    </style>
+    """
 
     # Save the graph as an HTML file
     path = "/tmp"
@@ -244,7 +377,7 @@ def display_graph(graph):
 
     # Fixed info panel HTML with scrollable content
     info_panel_html = """
-    <div id="info-panel" style="position: fixed; top: 20px; right: 10px; width: 300px; height: 720px; padding: 10px; background-color: #f9f9f9; border-radius: 5px; box-shadow: 0px 4px 8px rgba(0,0,0,0.1); z-index: 999; overflow-x: auto; overflow-y: auto;">
+    <div id="info-panel" style="position: fixed; top: 20px; right: 10px; width: 300px; height: 620px; padding: 10px; background-color: #f9f9f9; border-radius: 5px; box-shadow: 0px 4px 8px rgba(0,0,0,0.1); z-index: 999; overflow-x: auto; overflow-y: auto;">
         <h4>Properties</h4>
         <p>Select a node or edge to see details here.</p>
     </div>
@@ -265,6 +398,7 @@ def display_graph(graph):
     # Combine everything into the final HTML output
     full_html = f"""
     <div style="position: fixed; width: 100%; height: 770px;">
+        {style}
         {legend_html}
         {info_panel_html}
         {graph_html}

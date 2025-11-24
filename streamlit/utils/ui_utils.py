@@ -26,9 +26,16 @@ def display_sidebar(compound_list, gene_list):
         unsafe_allow_html=True,
     )
     st.sidebar.markdown(
-        """<br>""",
+        """
+        <div style="display: flex; align-items: center; justify-content: center;">
+            <a href="https://doi.org/10.5281/zenodo.15323478">
+                <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.15323478.svg" alt="DOI">
+            </a>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+    st.sidebar.write("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n")
     # st.sidebar.markdown(
     #     '<p class="sidebar-title">CYP450-KG</p>', unsafe_allow_html=True
     # )
