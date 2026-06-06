@@ -121,3 +121,47 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ipynb_checkpoints/
+
+# Large generated/import data
+import/*.csv
+!import/.gitkeep
+
+# Runtime/generated outputs
+runs/
+logs/
+slurm_logs/
+tmp/
+.hpc_scratch/
+.cache/
+pip-cache/
+artifacts/*
+!artifacts/.gitkeep
+
+# Neo4j local volumes
+volumes/
+neo4j/data/
+neo4j/logs/
+neo4j/import/
+neo4j/plugins/
+
+# Large artifacts
+*.zip
+*.tar.gz
+*.gz
+*.pt
+*.pth
+*.pkl
+*.joblib
+*.parquet
+*.jsonl
+*.jsonl.gz
+*.csv.gz
+
+# Python/cache/envs
+.venv/
+venv/
+pring-env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/

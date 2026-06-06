@@ -1,17 +1,19 @@
-# Use an official Python runtime as a parent image
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+FROM python:3.11-slim
 
-# Set the working directory in the container
-WORKDIR /modeling
+WORKDIR /opt/kg/modeling
 
-# Copy the requirements.txt to the container
-COPY requirements.txt ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --upgrade pip
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY modeling/requirements.txt ./requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# Copy the current directory contents into the container at /modeling
-COPY . .
+COPY scripts/install_pring_runtime.sh /opt/kg/bin/install_pring_runtime.sh
+COPY modeling/pring_modeling ./pring_modeling
+COPY modeling/scripts/run_modeling.sh /opt/kg/bin/run_modeling.sh
+RUN chmod +x /opt/kg/bin/*.sh
 
-# Keep the container running by opening a shell
-CMD ["tail", "-f", "/dev/null"]
+ENV PYTHONPATH=/opt/kg/modeling
+CMD ["/opt/kg/bin/run_modeling.sh"]

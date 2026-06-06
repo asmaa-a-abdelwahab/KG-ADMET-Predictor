@@ -1,25 +1,25 @@
-# The Dockerfile for the Streamlit app.
+FROM python:3.11-slim-bookworm
 
-# The base image is the latest Python 3.9 image from Docker Hub.
-FROM python:3.9.5-slim-buster
+WORKDIR /opt/kg/streamlit
 
-# Expose port 8501 for the Streamlit app
+# wkhtmltopdf is intentionally not installed here because it is a large,
+# distro-sensitive system dependency. The app now handles missing PDF export
+# gracefully and still provides the HTML report.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --upgrade pip
+
+COPY streamlit/requirements.txt ./requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+COPY scripts/install_pring_runtime.sh /opt/kg/bin/install_pring_runtime.sh
+COPY streamlit/app.py ./app.py
+COPY streamlit/utils ./utils
+COPY streamlit/images ./images
+COPY streamlit/scripts/start_streamlit.sh /opt/kg/bin/start_streamlit.sh
+RUN chmod +x /opt/kg/bin/*.sh
+
 EXPOSE 8501
-
-# Set the working directory in the container to /app
-WORKDIR /streamlit
-
-# Copy the requirements.txt file to the container
-COPY requirements.txt .
-
-# Install the latest version of pip
-RUN pip install -U pip
-
-# Install the dependencies from requirements.txt without caching
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install nano text editor to be able to edit the code in the container
-RUN apt-get update && apt-get install nano wkhtmltopdf -y && pip3 install neo4j
-
-# Set the default command for the container to run the Streamlit app
-CMD streamlit run app.py
+ENV PYTHONPATH=/opt/kg/streamlit
+CMD ["/opt/kg/bin/start_streamlit.sh"]

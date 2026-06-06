@@ -1,48 +1,130 @@
+name: kg-admet-pring
+
 services:
   neo4j:
-    build: ./neo4j
-    container_name: neo4j
+    build:
+      context: ./neo4j
+    container_name: kg-admet-neo4j
+    restart: unless-stopped
     ports:
-      - "7474:7474"  # Neo4j HTTP
-      - "7687:7687"  # Neo4j Bolt
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
     environment:
-      - NEO4J_AUTH=neo4j/cyp450kg
-      - NEO4J_apoc_export_file_enabled=true
-      - NEO4J_apoc_import_file_enabled=true
-      - NEO4J_apoc_import_file_use__neo4j__config=true
-      - NEO4J_PLUGINS=["apoc"]
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-cyp450kg}"
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_import_file_use__neo4j__config: "true"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL:-1G}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP_MAX:-2G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-1G}"
     volumes:
-      - ./volumes/neo4j-cypher:/cypher  # Directory for Cypher queries
-      - ./volumes/neo4j-data:/data  # Persist data using a named volume
-      - ./volumes/neo4j-logs:/logs  # Store logs persistently
-      - ./utils:/utils  # Plugins or utilities for Neo4j
-      - ./plugins:/plugins  # Custom plugins for Neo4j
-      - ./import:/import  # Import folder for Neo4j
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
+      # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
+      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
+      - ./artifacts/neo4j-import:/import
+    healthcheck:
+      # Use Neo4j's built-in cypher-shell rather than wget/curl. Some Neo4j
+      # images do not include wget, which can make a running database appear
+      # unhealthy and block pring-loader/modeling/streamlit dependencies.
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u \"${NEO4J_USER:-neo4j}\" -p \"${NEO4J_PASSWORD:-cyp450kg}\" \"RETURN 1 AS ok;\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+      start_period: 180s
+
+  pring-loader:
+    build:
+      context: .
+      dockerfile: ./neo4j/Dockerfile.pring-loader
+    container_name: kg-admet-pring-loader
+    profiles: ["load"]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
+      PRING_SCHEMA_DOT: "${PRING_SCHEMA_DOT:-}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+      PRING_LOAD_BATCH_SIZE: "${PRING_LOAD_BATCH_SIZE:-1000}"
+      PRING_ACTIVITY_THRESHOLD_UM: "${PRING_ACTIVITY_THRESHOLD_UM:-10}"
+      PRING_WEAK_ACTIVITY_AS_NEGATIVE: "${PRING_WEAK_ACTIVITY_AS_NEGATIVE:-true}"
+      PRING_CANDIDATE_PAIR_MODE: "${PRING_CANDIDATE_PAIR_MODE:-all}"
+      PRING_ALLOW_NETWORK: "${PRING_ALLOW_NETWORK:-false}"
+    volumes:
+      - ${PRING_RUNS_DIR:-./runs}:/runs
+      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ./artifacts/reports:/reports
+    command: ["/opt/kg/bin/load_pring_run.sh"]
 
   modeling:
-    build: ./modeling
-    container_name: modeling
-    ports:
-      - "5000:5000"
+    build:
+      context: .
+      dockerfile: ./modeling/Dockerfile
+    container_name: kg-admet-modeling
+    profiles: ["train"]
     depends_on:
-      - neo4j
+      neo4j:
+        condition: service_healthy
+    environment:
+      PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
+      MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
+      MODEL_REPORT_DIR: "${MODEL_REPORT_DIR:-/reports/modeling}"
+      MODEL_EXPORT_TO_NEO4J: "${MODEL_EXPORT_TO_NEO4J:-true}"
+      MODEL_TARGET_COLUMN: "${MODEL_TARGET_COLUMN:-label}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     volumes:
-      - ./streamlit:/streamlit  # App code or data shared with Streamlit
-      - ./import:/import  # Shared import folder from Neo4j
+      # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
+      # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
+      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
+      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ./artifacts/models:/models
+      - ./artifacts/reports:/reports
+    command: ["/opt/kg/bin/run_modeling.sh"]
 
   streamlit:
-    build: ./streamlit
-    container_name: streamlit
-    ports:
-      - "8501:8501"
+    build:
+      context: .
+      dockerfile: ./streamlit/Dockerfile
+    container_name: kg-admet-streamlit
+    restart: unless-stopped
     depends_on:
-      - neo4j  # Ensure Neo4j starts before Streamlit
-      - modeling
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    environment:
+      PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
+      MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
+      EDA_REPORT_DIR: "${EDA_REPORT_DIR:-/reports}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     volumes:
-      - ./streamlit:/streamlit  # Streamlit application code
-      - ../modeling/models:/models  # Access models from the modeling service
+      # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
+      # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
+      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
+      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ./artifacts/models:/models:ro
+      - ./artifacts/reports:/reports
+    command: ["/opt/kg/bin/start_streamlit.sh"]
 
 volumes:
-  neo4j-data:  # Named volume for Neo4j data
-  neo4j-logs:  # Named volume for Neo4j logs
-  neo4j-cypher:  # Named volume for Cypher queries files
+  neo4j-data:
+  neo4j-logs:

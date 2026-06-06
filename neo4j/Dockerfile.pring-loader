@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /opt/kg
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --upgrade pip
+
+COPY scripts/install_pring_runtime.sh /opt/kg/bin/install_pring_runtime.sh
+COPY neo4j/utils/load_pring_run.sh /opt/kg/bin/load_pring_run.sh
+COPY neo4j/utils/check_neo4j.py /opt/kg/bin/check_neo4j.py
+RUN chmod +x /opt/kg/bin/*.sh
+
+CMD ["/opt/kg/bin/load_pring_run.sh"]
