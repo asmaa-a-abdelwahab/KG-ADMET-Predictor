@@ -1014,6 +1014,137 @@ def apply_custom_styles() -> None:
             font-size: 13px;
             line-height: 1.45;
         }
+
+
+        /* Landing page improvements and top alignment */
+        .kg-landing-hero {
+            margin-top: 0 !important;
+        }
+        .kg-landing-hero-compact {
+            padding: 32px 36px !important;
+        }
+        .kg-analysis-overview,
+        .kg-functionality-panel {
+            margin: 18px 0;
+            padding: 22px 24px;
+            background: #FFFFFF;
+            border: 1px solid var(--kg-border);
+            border-radius: 20px;
+            box-shadow: 0 14px 34px rgba(17, 24, 39, .07);
+        }
+        .kg-analysis-overview {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(280px, .9fr);
+            gap: 20px;
+            align-items: center;
+        }
+        .kg-section-kicker {
+            color: var(--kg-red);
+            text-transform: uppercase;
+            letter-spacing: .12em;
+            font-size: 11px;
+            font-weight: 900;
+            margin-bottom: 7px;
+        }
+        .kg-overview-copy h2,
+        .kg-functionality-panel h3 {
+            margin: 0 0 8px;
+            color: #111827;
+            font-weight: 900;
+            letter-spacing: -.02em;
+        }
+        .kg-overview-copy h2 {
+            font-size: clamp(24px, 2.4vw, 34px);
+        }
+        .kg-overview-copy p {
+            margin: 0;
+            color: #475569;
+            font-size: 15.5px;
+            line-height: 1.65;
+        }
+        .kg-analysis-cards {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+        .kg-analysis-card {
+            padding: 14px 16px;
+            border-radius: 15px;
+            border: 1px solid #E2E8F0;
+            background: #F8FAFC;
+        }
+        .kg-analysis-card-red {
+            border-left: 5px solid var(--kg-red);
+        }
+        .kg-analysis-card-muted {
+            border-left: 5px solid #64748B;
+        }
+        .kg-analysis-card strong {
+            display: block;
+            margin-bottom: 4px;
+            color: #111827;
+            font-size: 14px;
+            font-weight: 900;
+        }
+        .kg-analysis-card span {
+            display: block;
+            color: #475569;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .kg-howto-grid-compact {
+            margin-top: 18px !important;
+        }
+        .kg-functionality-panel {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+        .kg-functionality-panel ul {
+            margin: 0;
+            padding-left: 19px;
+            color: #475569;
+            line-height: 1.65;
+            font-size: 14px;
+        }
+        .kg-functionality-panel li + li {
+            margin-top: 5px;
+        }
+        @media (max-width: 1100px) {
+            .kg-analysis-overview,
+            .kg-functionality-panel { grid-template-columns: 1fr; }
+        }
+
+        /* Keep sidebar and main content aligned at the top after hiding Streamlit chrome. */
+        section[data-testid="stSidebar"] > div {
+            padding-top: 0.85rem !important;
+        }
+        .main .block-container {
+            padding-top: 0.85rem !important;
+        }
+
+
+        .kg-license-footer {
+            margin: 26px 0 10px;
+            padding: 13px 16px;
+            border-radius: 14px;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            color: #475569;
+            font-size: 12.5px;
+            line-height: 1.6;
+            box-shadow: 0 6px 18px rgba(17, 24, 39, .05);
+        }
+        .kg-license-footer strong {
+            color: #111827;
+        }
+        .kg-license-footer a {
+            margin-left: 8px;
+            color: #EF4444 !important;
+            text-decoration: none !important;
+            font-weight: 900;
+            white-space: nowrap;
+        }
 </style>
         """,
         unsafe_allow_html=True,

@@ -13,6 +13,7 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 import pandas as pd
 from pyvis.network import Network
@@ -27,6 +28,14 @@ APP_BRAND_NAME = "CYP450-KG Explorer"
 APP_BRAND_DOI = "10.5281/zenodo.15323478"
 APP_BRAND_DOI_URL = f"https://doi.org/{APP_BRAND_DOI}"
 APP_BRAND_TAGLINE = "Compound, assay, and target evidence from PRING-generated Neo4j graphs."
+APP_LICENSE_NAME = "GNU General Public License v3.0 (GPL-3.0)"
+APP_LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.en.html"
+APP_LICENSE_DISCLAIMER = (
+    "CYP450-KG Explorer is distributed under the GNU General Public License v3.0 (GPL-3.0). "
+    "You may use, modify, and redistribute this software under GPL-3.0 terms. "
+    "This software and its exported graph, table, and report outputs are provided without warranty; "
+    "all scientific, modelling, and regulatory interpretations should be independently reviewed."
+)
 
 
 def _brand_logo_data_uri() -> str:
@@ -309,6 +318,148 @@ def _format_value(value: Any) -> str:
     return escape(value)
 
 
+
+def _looks_like_url(value: Any) -> bool:
+    """Return True when a property value looks like an external URL."""
+    return isinstance(value, str) and bool(re.match(r"^https?://", value.strip(), flags=re.IGNORECASE))
+
+
+def _clean_external_value(value: Any) -> str:
+    """Convert scalar property values into normalized link text."""
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            cleaned = _clean_external_value(item)
+            if cleaned:
+                return cleaned
+        return ""
+    text = str(unescape_quotes(value)).strip()
+    return "" if text.lower() in {"none", "nan", "na", "n/a"} else text
+
+
+def _first_external_prop(props: dict[str, Any], keys: list[str]) -> str:
+    """Return first non-empty value from possible identifier properties."""
+    for key in keys:
+        value = _clean_external_value(props.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _add_external_link(items: list[tuple[str, str]], seen: set[str], label: str, url: str) -> None:
+    """Append an external link when valid and not already present."""
+    if not _looks_like_url(url):
+        return
+    url = url.strip()
+    if url in seen:
+        return
+    seen.add(url)
+    items.append((label, url))
+
+
+def _external_database_links(entity_type: str, props: dict[str, Any]) -> list[tuple[str, str]]:
+    """Create useful external database links for tooltip entities.
+
+    Links are derived from common PRING/PubChem/UniProt/GO/Reactome/PDB fields
+    as well as any URL-like properties already stored in Neo4j.
+    """
+    items: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    # Preserve direct URLs stored in the graph first.
+    for key, value in props.items():
+        if key == "labels" or value in (None, "", [], {}):
+            continue
+        if isinstance(value, str) and _looks_like_url(value):
+            label = str(key).replace("_", " ").replace("url", "URL").title()
+            _add_external_link(items, seen, label, value)
+        elif isinstance(value, (list, tuple, set)):
+            for idx, item in enumerate(value, start=1):
+                if _looks_like_url(item):
+                    label = f"{str(key).replace('_', ' ').title()} {idx}"
+                    _add_external_link(items, seen, label, str(item))
+
+    doi = _first_external_prop(props, ["doi", "DOI"])
+    if doi:
+        doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi, flags=re.IGNORECASE).strip()
+        _add_external_link(items, seen, "DOI", f"https://doi.org/{quote_plus(doi, safe='/._-;()')}")
+
+    pmid = _first_external_prop(props, ["pmid", "PMID", "pubmed_id", "PubMedID"])
+    if pmid:
+        pmid = re.sub(r"[^0-9]", "", pmid)
+        if pmid:
+            _add_external_link(items, seen, "PubMed", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
+
+    cid = _first_external_prop(props, ["cid", "CID", "pubchem_cid", "PubChemCID"])
+    if not cid:
+        pubchem_uri = _first_external_prop(props, ["pubchem_uri", "compound_uri", "uri"])
+        match = re.search(r"CID[:_/ ]?(\d+)", pubchem_uri, flags=re.IGNORECASE)
+        if match:
+            cid = match.group(1)
+    if cid and str(cid).isdigit():
+        _add_external_link(items, seen, "PubChem Compound", f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}")
+
+    sid = _first_external_prop(props, ["sid", "SID", "substance_id", "PubChemSID"])
+    if sid and str(sid).isdigit():
+        _add_external_link(items, seen, "PubChem Substance", f"https://pubchem.ncbi.nlm.nih.gov/substance/{sid}")
+
+    aid = _first_external_prop(props, ["aid", "AID", "bioassay_id", "assay_id", "PubChemAID"])
+    if aid and str(aid).isdigit():
+        _add_external_link(items, seen, "PubChem BioAssay", f"https://pubchem.ncbi.nlm.nih.gov/bioassay/{aid}")
+
+    accession = _first_external_prop(
+        props,
+        ["uniprot_id", "uniprot_accession", "accession", "protein_id", "UniProt", "uniprot"],
+    )
+    if accession and re.match(r"^[A-NR-Z][0-9][A-Z0-9]{3}[0-9](?:-[0-9]+)?$|^[OPQ][0-9][A-Z0-9]{3}[0-9](?:-[0-9]+)?$", accession):
+        _add_external_link(items, seen, "UniProt", f"https://www.uniprot.org/uniprotkb/{accession}/entry")
+        _add_external_link(items, seen, "AlphaFold", f"https://alphafold.ebi.ac.uk/entry/{accession.split('-')[0]}")
+
+    alphafold_id = _first_external_prop(props, ["alphafold_id", "model_id", "model", "name"])
+    match = re.match(r"^AF-([A-Z0-9]+)-F\d+", alphafold_id)
+    if match:
+        _add_external_link(items, seen, "AlphaFold", f"https://alphafold.ebi.ac.uk/entry/{match.group(1)}")
+
+    refseq = _first_external_prop(props, ["refseq_accession", "ProteinRefSeqAccession", "refseq_id"])
+    if refseq:
+        _add_external_link(items, seen, "NCBI Protein", f"https://www.ncbi.nlm.nih.gov/protein/{quote_plus(refseq)}")
+
+    symbol = _first_external_prop(props, ["cyp_symbol", "gene_symbol", "symbol", "hgnc_symbol"])
+    if symbol:
+        _add_external_link(items, seen, "NCBI Gene search", f"https://www.ncbi.nlm.nih.gov/gene/?term={quote_plus(symbol)}")
+
+    gene_id = _first_external_prop(props, ["gene_id", "entrez_gene_id", "GeneID"])
+    if gene_id and str(gene_id).isdigit():
+        _add_external_link(items, seen, "NCBI Gene", f"https://www.ncbi.nlm.nih.gov/gene/{gene_id}")
+
+    go_id = _first_external_prop(props, ["go_id", "GO_ID", "id"])
+    match = re.search(r"GO:\d+", go_id)
+    if match:
+        go = match.group(0)
+        _add_external_link(items, seen, "Gene Ontology", f"https://amigo.geneontology.org/amigo/term/{go.replace(':', '%3A')}")
+
+    reactome_id = _first_external_prop(props, ["reactome_id", "pathway_id", "stable_id", "id"])
+    match = re.search(r"R-HSA-\d+", reactome_id)
+    if match:
+        _add_external_link(items, seen, "Reactome", f"https://reactome.org/content/detail/{match.group(0)}")
+
+    interpro_id = _first_external_prop(props, ["interpro_id", "ipr_id", "id"])
+    match = re.search(r"IPR\d+", interpro_id, flags=re.IGNORECASE)
+    if match:
+        _add_external_link(items, seen, "InterPro", f"https://www.ebi.ac.uk/interpro/entry/InterPro/{match.group(0).upper()}/")
+
+    pdb_id = _first_external_prop(props, ["pdb_id", "PDB", "structure_id", "id"])
+    if pdb_id and re.match(r"^[0-9][A-Za-z0-9]{3}$", pdb_id):
+        _add_external_link(items, seen, "RCSB PDB", f"https://www.rcsb.org/structure/{pdb_id.upper()}")
+
+    inchi_key = _first_external_prop(props, ["inchi_key", "InChIKey", "jchem_inchi_key", "indigo_inchi_key"])
+    if inchi_key:
+        _add_external_link(items, seen, "PubChem InChIKey search", f"https://pubchem.ncbi.nlm.nih.gov/#query={quote_plus(inchi_key)}")
+
+    # Keep tooltip compact.
+    return items[:8]
+
 def _copy_value(value: Any) -> str:
     """Return the full untruncated value used by tooltip copy buttons."""
     value = unescape_quotes(value)
@@ -320,7 +471,7 @@ def _copy_value(value: Any) -> str:
 
 
 def _format_tooltip_html(kind: str, title: str, entity_type: str, props: dict[str, Any]) -> str:
-    """Create reusable HTML for hover and pinned tooltips with copyable values."""
+    """Create reusable HTML for hover and pinned tooltips with copyable values and external links."""
     rows = [("Type" if kind == "node" else "Relationship", entity_type)]
     clean_props = {k: v for k, v in props.items() if k not in {"labels"} and v not in (None, "", [], {})}
     for key, value in list(clean_props.items())[:28]:
@@ -340,6 +491,23 @@ def _format_tooltip_html(kind: str, title: str, entity_type: str, props: dict[st
             f"<button type='button' class='kg-copy-value' data-copy='{escape(full_value, quote=True)}' title='Copy value'>Copy</button>"
             "</div>"
         )
+
+    link_items = _external_database_links(entity_type, props)
+    links_html = ""
+    if link_items:
+        link_parts = []
+        for link_label, url in link_items:
+            link_parts.append(
+                f"<a class='kg-tooltip-link' href='{escape(url, quote=True)}' target='_blank' rel='noopener noreferrer'>"
+                f"{escape(link_label)}</a>"
+            )
+        links_html = (
+            "<div class='kg-tooltip-links'>"
+            "<div class='kg-tooltip-section-title'>External database links</div>"
+            f"<div class='kg-tooltip-link-grid'>{''.join(link_parts)}</div>"
+            "</div>"
+        )
+
     hidden = f"<div class='kg-tooltip-more'>+ {hidden_count} more properties in the table view</div>" if hidden_count else ""
     copy_all = escape("\n".join(copy_lines), quote=True)
     return (
@@ -347,7 +515,7 @@ def _format_tooltip_html(kind: str, title: str, entity_type: str, props: dict[st
         f"<div class='kg-tooltip-heading'>{escape(title)}</div>"
         f"<button type='button' class='kg-tooltip-copy-all' data-copy='{copy_all}' title='Copy all visible tooltip values'>Copy all</button>"
         "</div>"
-        f"<div class='kg-tooltip-body'>{''.join(body_parts)}</div>{hidden}"
+        f"{links_html}<div class='kg-tooltip-body'>{''.join(body_parts)}</div>{hidden}"
     )
 
 
@@ -468,6 +636,9 @@ table {{ width:100%; border-collapse:collapse; font-size:14px; background:#fff; 
 th {{ background:#F3F4F6; text-align:left; color:#374151; }}
 th, td {{ border-bottom:1px solid var(--kg-border); padding:10px 12px; vertical-align:top; overflow-wrap:anywhere; }}
 .footer {{ color:#64748B; font-size:13px; }}
+.license-notice {{ background:#F8FAFC; border-top:1px solid var(--kg-border); color:#475569; font-size:12.5px; line-height:1.6; }}
+.license-notice strong {{ color:#111827; }}
+.license-notice a {{ color:#EF4444; font-weight:800; text-decoration:none; }}
 </style>
 </head>
 <body>
@@ -495,6 +666,11 @@ th, td {{ border-bottom:1px solid var(--kg-border); padding:10px 12px; vertical-
     <ul>{extras}</ul>
   </section>
   <section class="footer">Use the CSV tables together with the HTML report and graph export for a reproducible evidence audit trail.</section>
+  <section class="license-notice">
+    <strong>License disclaimer:</strong>
+    {escape(APP_LICENSE_DISCLAIMER)}
+    <br><a href="{APP_LICENSE_URL}" target="_blank">{escape(APP_LICENSE_NAME)}</a>
+  </section>
 </div>
 </body>
 </html>"""
@@ -522,6 +698,10 @@ def _dataframes_zip_bytes(
             "brand": APP_BRAND_KICKER,
             "doi": APP_BRAND_DOI,
             "doi_url": APP_BRAND_DOI_URL,
+            "license": "GPL-3.0",
+            "license_name": APP_LICENSE_NAME,
+            "license_url": APP_LICENSE_URL,
+            "license_disclaimer": APP_LICENSE_DISCLAIMER,
             "package_title": package_title,
             "generated_at_utc": generated_at,
             "csv_files": csv_files,
@@ -529,6 +709,10 @@ def _dataframes_zip_bytes(
         }
         zf.writestr("00_README.html", _branded_data_readme_html(tables, package_title, csv_files, extra_file_names, generated_at).encode("utf-8"))
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+        zf.writestr(
+            "LICENSE_NOTICE.md",
+            (f"# License notice\n\n{APP_LICENSE_DISCLAIMER}\n\nFull license text: {APP_LICENSE_URL}\n").encode("utf-8"),
+        )
 
         for filename, content in (extra_files or {}).items():
             data = content.encode("utf-8") if isinstance(content, str) else content
@@ -791,6 +975,45 @@ def display_graph(graph, action: str = "pring_graph") -> None:
     }
     .kg-legend li { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; color: #334155; white-space: nowrap; overflow: visible; }
     .kg-legend li span { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 999px; display: inline-block; border: 1px solid rgba(15,23,42,.22); }
+
+
+    .kg-tooltip-links {
+        padding: 10px 12px;
+        border-bottom: 1px solid #E2E8F0;
+        background: #F8FAFC;
+    }
+    .kg-tooltip-section-title {
+        margin-bottom: 6px;
+        color: #475569;
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+    }
+    .kg-tooltip-link-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .kg-tooltip-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border-radius: 999px;
+        padding: 5px 8px;
+        background: #FFFFFF;
+        border: 1px solid #CBD5E1;
+        color: #334155 !important;
+        text-decoration: none !important;
+        font-size: 11px;
+        font-weight: 800;
+    }
+    .kg-tooltip-link::after { content: "↗"; color: #EF4444; font-weight: 900; }
+    .kg-tooltip-link:hover {
+        border-color: #EF4444;
+        color: #111827 !important;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, .12);
+    }
 
     #kg-tooltip {
         display: none;
@@ -1069,6 +1292,8 @@ def display_graph(graph, action: str = "pring_graph") -> None:
                         event.stopPropagation();
                         hideTooltip(false);
                         const cls = button.className || "";
+                        // Match the visible arrow direction: up moves the view up, down moves it down,
+                        // left moves it left, and right moves it right.
                         if (cls.indexOf("vis-up") !== -1) panBy(0, -120, true);
                         else if (cls.indexOf("vis-down") !== -1) panBy(0, 120, true);
                         else if (cls.indexOf("vis-left") !== -1) panBy(-120, 0, true);
@@ -2211,6 +2436,9 @@ def generate_report_html(
             .legend li {{ display: flex; align-items: center; gap: 8px; background: #F8FAFC; border: 1px solid var(--app-border); border-radius: 10px; padding: 7px 9px; }}
             .legend span {{ width: 12px; height: 12px; border-radius: 999px; border: 1px solid rgba(17,24,39,.22); display: inline-block; }}
             .legend em {{ margin-left: auto; color: var(--app-muted); font-style: normal; font-weight: 700; }}
+            .license-notice {{ background:#F8FAFC; color:#475569; font-size:12.5px; line-height:1.65; }}
+            .license-notice strong {{ color:#111827; }}
+            .license-notice a {{ color:#EF4444; font-weight:800; text-decoration:none; }}
             @media (max-width: 860px) {{ .metrics, .selected, .takeaway-strip, .interpretation-columns, .insight-grid {{ grid-template-columns: 1fr; }} body {{ padding: 12px; }} section, header {{ padding: 20px; }} }}
             @media print {{ body {{ background: #FFFFFF; padding: 0; }} .report {{ box-shadow: none; border: 0; }} }}
         </style>
@@ -2285,6 +2513,12 @@ def generate_report_html(
             <section>
                 <h2>Recommended next checks</h2>
                 {next_steps_html}
+            </section>
+            <section class="license-notice">
+                <h2>License disclaimer</h2>
+                <p><strong>{escape(APP_LICENSE_NAME)}</strong></p>
+                <p>{escape(APP_LICENSE_DISCLAIMER)}</p>
+                <p><a href="{APP_LICENSE_URL}" target="_blank">Read the full GPL-3.0 license text</a></p>
             </section>
         </div>
     </body>
