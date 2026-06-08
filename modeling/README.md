@@ -163,3 +163,47 @@ python -m pip install -e "./modeling[torch]"
 ```
 
 The code also contains a fallback logger, so a missing `loguru` package should no longer block Stage 1 imports.
+
+### Stage 1 notebook default paths
+
+The Stage 1 notebook now uses this default standalone Stage 1 export path:
+
+```python
+MODEL_INPUT = Path("A:/Repositories/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling/stage1_neo4j_gds_baselines")
+OUTPUT_DIR = Path("/models/notebook_stage1_tabular")
+REPORT_DIR = Path("/reports/modeling")
+```
+
+When running inside Docker or HPC, change `MODEL_INPUT` to the mounted Linux path for the same folder.
+
+
+## End-to-end automation update
+
+The Docker entrypoint now supports two modes:
+
+```bash
+# Start the modeling container but do not train
+MODEL_AUTO_TRAIN=false docker compose --profile modeling up --build modeling
+
+# Train immediately when the container starts
+MODEL_AUTO_TRAIN=true docker compose --profile modeling up --build modeling
+```
+
+`MODEL_STAGE=run_all` now trains all configured model families, selects the best model per stage, runs comparison visualizations, exports best predictions to Neo4j, and creates Stage 4 explanation reports.
+
+Default multi-model configuration:
+
+```bash
+MODEL_STAGES="stage1 stage2 stage3 stage4"
+MODEL_STAGE1_MODELS="random_forest extra_trees"
+MODEL_STAGE2_MODELS="distmult complex rotate"
+MODEL_STAGE3_MODELS="rgcn hgt"
+MODEL_EXPORT_SCOPE="best_only"
+```
+
+For HPC/local non-Docker use:
+
+```bash
+bash scripts/run_all_modeling_local.sh
+sbatch scripts/run_all_modeling_slurm.sh
+```
