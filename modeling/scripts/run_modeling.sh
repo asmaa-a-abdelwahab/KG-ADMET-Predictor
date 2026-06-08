@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#SBATCH --job-name=modeling
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=250G
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/all_stages_%j.out
+#SBATCH --error=logs/all_stages_%j.err
+
+
 set -euo pipefail
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
