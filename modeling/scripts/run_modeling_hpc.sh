@@ -33,51 +33,6 @@ mkdir -p \
   "$DEFAULT_REPORT_DIR"
 
 # ------------------------------------------------------------
-# 2. Activate Python environment
-# ------------------------------------------------------------
-# IMPORTANT:
-# Use Python >= 3.10.
-# Replace this path if your Python 3.10/3.11 environment has another name.
-
-if [ -f "${PROJECT_DIR}/pring-py310-env/bin/activate" ]; then
-  source "${PROJECT_DIR}/pring-py310-env/bin/activate"
-elif [ -f "${PROJECT_DIR}/.venv/bin/activate" ]; then
-  source "${PROJECT_DIR}/.venv/bin/activate"
-else
-  echo "ERROR: No Python environment found."
-  echo "Expected one of:"
-  echo "  ${PROJECT_DIR}/pring-py310-env/bin/activate"
-  echo "  ${PROJECT_DIR}/.venv/bin/activate"
-  echo
-  echo "Create one with:"
-  echo "  cd ${PROJECT_DIR}"
-  echo "  module load python/3.10"
-  echo "  python -m venv pring-py310-env"
-  echo "  source pring-py310-env/bin/activate"
-  echo "  python -m pip install --upgrade pip setuptools wheel"
-  echo "  python -m pip install -e './modeling[notebooks]'"
-  exit 1
-fi
-
-echo "Python executable: $(which python)"
-python --version
-
-PYTHON_CHECK=$(python - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-if sys.version_info < (3, 10):
-    raise SystemExit(1)
-PY
-) || {
-  echo "ERROR: Python >= 3.10 is required."
-  echo "Current Python:"
-  python --version
-  exit 1
-}
-
-echo "Python version check passed: ${PYTHON_CHECK}"
-
-# ------------------------------------------------------------
 # 3. Install package in editable mode if available
 # ------------------------------------------------------------
 
