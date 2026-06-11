@@ -180,12 +180,221 @@ def _add_edges_from_csv(data: Any, stage_dir: Path) -> bool:
     return bool(grouped)
 
 
+
+def _extract_named_value(value: Any, preferred_keys: list[str]) -> Any:
+    """Return a likely tensor/list payload from a nested export record."""
+    if isinstance(value, dict):
+        for k in preferred_keys:
+            if k in value:
+                return value[k]
+        # If the dict contains a single tensor/list-like value, use it.
+        tensor_like = []
+        for v in value.values():
+            if isinstance(v, (torch.Tensor, list, tuple)):
+                tensor_like.append(v)
+        if len(tensor_like) == 1:
+            return tensor_like[0]
+    return value
+
+
+def _normalize_node_type_key(key: Any, node_type_mapping: Any | None) -> str:
+    """Normalize node-type keys from string/int export variants.
+
+    PRING Stage 3 exports may store tensors as x_by_type['Compound'] or
+    x_by_type[0], with node_type_mapping either {'Compound': 0} or
+    {0: 'Compound'}. This helper accepts both orientations.
+    """
+    key_s = str(key)
+    if isinstance(node_type_mapping, dict):
+        # Direct lookup: {0: 'Compound'} or {'0': 'Compound'}.
+        for lookup in (key, key_s):
+            if lookup in node_type_mapping:
+                value = node_type_mapping[lookup]
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, dict):
+                    for name_key in ['name', 'node_type', 'type', 'label']:
+                        if name_key in value:
+                            return str(value[name_key])
+                # Reverse orientation may still need fallback below.
+        # Reverse lookup: {'Compound': 0}.
+        for name, idx in node_type_mapping.items():
+            if str(idx) == key_s:
+                return str(name)
+            if isinstance(idx, dict):
+                idx_value = None
+                for id_key in ['id', 'idx', 'index', 'node_type_id', 'mapped_id']:
+                    if id_key in idx:
+                        idx_value = idx[id_key]
+                        break
+                if idx_value is not None and str(idx_value) == key_s:
+                    for name_key in ['name', 'node_type', 'type', 'label']:
+                        if name_key in idx:
+                            return str(idx[name_key])
+                    return str(name)
+    return key_s
+
+
+def _normalize_edge_type_from_mapping(key: Any, edge_type_mapping: Any | None) -> tuple[str, str, str] | None:
+    """Normalize edge-type keys from tuple/string/id mapping variants."""
+    parsed = _edge_type_from_key(key)
+    if parsed is not None:
+        return parsed
+    if not isinstance(edge_type_mapping, dict):
+        return None
+
+    key_s = str(key)
+    value = None
+    for lookup in (key, key_s):
+        if lookup in edge_type_mapping:
+            value = edge_type_mapping[lookup]
+            break
+    if value is None:
+        # Reverse mapping can appear as {('Compound','rel','Protein'): 0}
+        # or {'Compound__rel__Protein': 0}.
+        for maybe_etype, maybe_id in edge_type_mapping.items():
+            if str(maybe_id) == key_s:
+                value = maybe_etype
+                break
+            if isinstance(maybe_id, dict):
+                for id_key in ['id', 'idx', 'index', 'relation_id', 'edge_type_id', 'mapped_id']:
+                    if id_key in maybe_id and str(maybe_id[id_key]) == key_s:
+                        value = maybe_id
+                        break
+            if value is not None:
+                break
+    if value is None:
+        return None
+
+    parsed = _edge_type_from_key(value)
+    if parsed is not None:
+        return parsed
+
+    if isinstance(value, dict):
+        src = None
+        rel = None
+        dst = None
+        for k in ['source_type', 'src_type', 'head_type', 'source_node_type', 'start_node_type', 'source']:
+            if k in value:
+                src = value[k]
+                break
+        for k in ['relation_type', 'rel_type', 'relation', 'edge_type', 'type', 'relationship_type', 'name']:
+            if k in value:
+                rel = value[k]
+                break
+        for k in ['target_type', 'dst_type', 'tail_type', 'target_node_type', 'end_node_type', 'target', 'destination']:
+            if k in value:
+                dst = value[k]
+                break
+        if src is not None and rel is not None and dst is not None:
+            return str(src), str(rel), str(dst)
+        # Sometimes the dict uses keys src/rel/dst.
+        keys = list(value.keys())
+        if len(keys) == 3 and all(k in value for k in ['src', 'rel', 'dst']):
+            return str(value['src']), str(value['rel']), str(value['dst'])
+
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        return str(value[0]), str(value[1]), str(value[2])
+
+    return None
+
+
+def _add_x_by_type_payload(data: Any, obj: dict[str, Any]) -> bool:
+    x_by_type = obj.get('x_by_type') or obj.get('features_by_type') or obj.get('node_features_by_type')
+    node_type_mapping = obj.get('node_type_mapping')
+    node_type_counts = obj.get('node_type_counts') or obj.get('num_nodes_by_type') or obj.get('node_counts')
+    added = False
+
+    if isinstance(x_by_type, dict):
+        for raw_key, raw_x in x_by_type.items():
+            node_type = _normalize_node_type_key(raw_key, node_type_mapping)
+            raw_x = _extract_named_value(raw_x, ['x', 'features', 'tensor', 'values', 'data'])
+            try:
+                x = _as_tensor(raw_x, dtype=torch.float32)
+            except Exception:
+                continue
+            if x.ndim == 1:
+                x = x.view(-1, 1)
+            data[node_type].x = x
+            data[node_type].num_nodes = int(x.size(0))
+            added = True
+
+    if isinstance(node_type_counts, dict):
+        for raw_key, n in node_type_counts.items():
+            node_type = _normalize_node_type_key(raw_key, node_type_mapping)
+            try:
+                n_int = int(n)
+            except Exception:
+                if isinstance(n, dict):
+                    n_val = None
+                    for k in ['num_nodes', 'count', 'n']:
+                        if k in n:
+                            n_val = n[k]
+                            break
+                    if n_val is None:
+                        continue
+                    n_int = int(n_val)
+                else:
+                    continue
+            data[node_type].num_nodes = max(int(getattr(data[node_type], 'num_nodes', 0) or 0), n_int)
+            added = True
+
+    return added
+
+
+def _add_edge_by_type_payload(data: Any, obj: dict[str, Any]) -> bool:
+    # Prefer leakage-safe train-only graph if available.
+    edge_by_type = (
+        obj.get('train_edge_index_by_type')
+        or obj.get('edge_index_train_by_type')
+        or obj.get('edge_index_train_only_by_type')
+        or obj.get('edge_index_by_type')
+        or obj.get('edge_by_type')
+    )
+    edge_type_mapping = obj.get('edge_type_mapping') or obj.get('relation_mapping')
+    if not isinstance(edge_by_type, dict):
+        return False
+
+    added = False
+    for raw_key, raw_edge in edge_by_type.items():
+        etype = _normalize_edge_type_from_mapping(raw_key, edge_type_mapping)
+        if etype is None:
+            # Some payloads already use tuple-like strings inside nested records.
+            if isinstance(raw_edge, dict):
+                for k in ['edge_type', 'relation_type', 'etype']:
+                    if k in raw_edge:
+                        etype = _normalize_edge_type_from_mapping(raw_edge[k], edge_type_mapping)
+                        break
+        if etype is None:
+            continue
+
+        raw_edge = _extract_named_value(raw_edge, ['edge_index', 'edges', 'index', 'tensor', 'values', 'data'])
+        try:
+            ei = _as_tensor(raw_edge, dtype=torch.long)
+        except Exception:
+            continue
+        if ei.ndim != 2:
+            continue
+        if ei.shape[0] != 2 and ei.shape[1] == 2:
+            ei = ei.t().contiguous()
+        if ei.shape[0] != 2:
+            continue
+
+        data[etype].edge_index = ei.contiguous()
+        src_t, _, dst_t = etype
+        if ei.numel() > 0:
+            data[src_t].num_nodes = max(int(getattr(data[src_t], 'num_nodes', 0) or 0), int(ei[0].max()) + 1)
+            data[dst_t].num_nodes = max(int(getattr(data[dst_t], 'num_nodes', 0) or 0), int(ei[1].max()) + 1)
+        added = True
+    return added
+
+
 def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> Any | None:
     if HeteroData is None:
         return None
 
     # Common wrapper keys.
-    for key in ["data", "heterodata", "hetero_data", "pyg_data"]:
+    for key in ['data', 'heterodata', 'hetero_data', 'pyg_data']:
         if key in obj:
             val = obj[key]
             if isinstance(val, HeteroData):
@@ -202,43 +411,67 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
 
     data = HeteroData()
 
+    # PRING tensor-only payload style used in the current Stage 3 export:
+    # {'x_by_type': ..., 'train_edge_index_by_type': ..., 'edge_index_by_type': ...}
+    _add_x_by_type_payload(data, obj)
+    _add_edge_by_type_payload(data, obj)
+
     # Payload style: x_dict / edge_index_dict.
-    x_dict = obj.get("x_dict") or obj.get("node_features") or obj.get("features")
+    x_dict = obj.get('x_dict') or obj.get('node_features') or obj.get('features')
     if isinstance(x_dict, dict):
+        node_type_mapping = obj.get('node_type_mapping')
         for node_type, x in x_dict.items():
-            data[str(node_type)].x = _as_tensor(x, dtype=torch.float32)
+            node_type = _normalize_node_type_key(node_type, node_type_mapping)
+            x = _extract_named_value(x, ['x', 'features', 'tensor', 'values', 'data'])
+            try:
+                data[str(node_type)].x = _as_tensor(x, dtype=torch.float32)
+            except Exception:
+                continue
+            if data[str(node_type)].x.ndim == 1:
+                data[str(node_type)].x = data[str(node_type)].x.view(-1, 1)
             data[str(node_type)].num_nodes = int(data[str(node_type)].x.size(0))
 
-    num_nodes = obj.get("num_nodes_dict") or obj.get("num_nodes") or obj.get("node_counts")
+    num_nodes = obj.get('num_nodes_dict') or obj.get('num_nodes') or obj.get('node_counts')
     if isinstance(num_nodes, dict):
+        node_type_mapping = obj.get('node_type_mapping')
         for node_type, n in num_nodes.items():
-            data[str(node_type)].num_nodes = int(n)
+            node_type = _normalize_node_type_key(node_type, node_type_mapping)
+            try:
+                data[str(node_type)].num_nodes = int(n)
+            except Exception:
+                pass
 
-    edge_dict = obj.get("edge_index_dict") or obj.get("edge_indices") or obj.get("edges")
+    edge_dict = obj.get('edge_index_dict') or obj.get('edge_indices') or obj.get('edges')
     if isinstance(edge_dict, dict):
+        edge_type_mapping = obj.get('edge_type_mapping') or obj.get('relation_mapping')
         for key, edge_index in edge_dict.items():
-            etype = _edge_type_from_key(key)
+            etype = _normalize_edge_type_from_mapping(key, edge_type_mapping)
             if etype is None:
                 continue
-            ei = _as_tensor(edge_index, dtype=torch.long)
+            edge_index = _extract_named_value(edge_index, ['edge_index', 'edges', 'index', 'tensor', 'values', 'data'])
+            try:
+                ei = _as_tensor(edge_index, dtype=torch.long)
+            except Exception:
+                continue
             if ei.ndim == 2 and ei.shape[0] != 2 and ei.shape[1] == 2:
                 ei = ei.t().contiguous()
-            data[etype].edge_index = ei
+            if ei.ndim == 2 and ei.shape[0] == 2:
+                data[etype].edge_index = ei
 
     # PyG HeteroData.to_dict() style: {node_type: {x, num_nodes}, (src, rel, dst): {edge_index}}
     for key, value in obj.items():
         if not isinstance(value, dict):
             continue
         etype = _edge_type_from_key(key)
-        if etype is not None and "edge_index" in value:
-            data[etype].edge_index = _as_tensor(value["edge_index"], dtype=torch.long)
+        if etype is not None and 'edge_index' in value:
+            data[etype].edge_index = _as_tensor(value['edge_index'], dtype=torch.long)
             continue
-        if isinstance(key, str) and ("x" in value or "num_nodes" in value):
-            if "x" in value and value["x"] is not None:
-                data[key].x = _as_tensor(value["x"], dtype=torch.float32)
+        if isinstance(key, str) and ('x' in value or 'num_nodes' in value):
+            if 'x' in value and value['x'] is not None:
+                data[key].x = _as_tensor(value['x'], dtype=torch.float32)
                 data[key].num_nodes = int(data[key].x.size(0))
-            if "num_nodes" in value and value["num_nodes"] is not None:
-                data[key].num_nodes = int(value["num_nodes"])
+            if 'num_nodes' in value and value['num_nodes'] is not None:
+                data[key].num_nodes = int(value['num_nodes'])
 
     if stage_dir is not None:
         # Use CSV metadata to complete missing node counts/features and train-only edges.
@@ -249,7 +482,6 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
     if len(data.node_types) > 0 and len(data.edge_types) > 0:
         return data
     return None
-
 
 def _load_heterodata_from_csv(stage_dir: Path) -> Any | None:
     if HeteroData is None:
