@@ -541,16 +541,71 @@ def load_heterodata(stage_dir: Path):
 
 
 def load_node_maps(stage_dir: Path) -> dict[str, dict[str, int]]:
+    """Load node reference -> local index maps for Stage 3 pair encoding.
+
+    PRING Stage 3 exports may store ``node_mapping.csv`` with an explicit local
+    index column, or with only ``node_id``, ``node_ref`` and ``label``. In the
+    latter case, the local index is the row order within each node type, matching
+    the tensor order in ``x_by_type`` / ``node_type_counts``.
+    """
     path = stage_dir / "node_mapping.csv"
     if not path.exists():
         path = stage_dir / "pyg_export" / "node_mapping.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"Could not find node_mapping.csv under {stage_dir}")
+
     df = read_table(path)
     type_col = pick_col(df, ["node_type", "type", "label"])
-    id_col = pick_col(df, ["node_id", "node_key", "element_id", "eid", "id", "node_ref"])
-    idx_col = pick_col(df, ["local_id", "local_index", "idx", "node_index", "mapped_id"])
+    idx_col = pick_col(df, ["local_id", "local_index", "idx", "node_index", "mapped_id"], required=False)
+
+    # If no explicit local index exists, derive it from row order within each node
+    # type. This supports mappings with columns like: node_id,node_ref,label.
+    if not idx_col:
+        idx_col = "__derived_local_index"
+        df[idx_col] = df.groupby(type_col, sort=False).cumcount().astype(int)
+
+    # Add every available identifier as a valid lookup key. Pair files may refer
+    # to either node_id or node_ref, so using a single id column is fragile.
+    key_cols = [
+        c for c in [
+            "node_ref", "node_id", "node_key", "element_id", "eid", "id",
+            "local_id", "local_index", "idx", "node_index", "mapped_id",
+        ]
+        if c in df.columns
+    ]
+    if not key_cols:
+        raise KeyError(
+            "No node identifier columns were found in node_mapping.csv. "
+            f"Available columns: {list(df.columns)}"
+        )
+
     maps: dict[str, dict[str, int]] = {}
     for _, row in df.iterrows():
-        maps.setdefault(str(row[type_col]), {})[str(row[id_col])] = int(row[idx_col])
+        node_type = str(row[type_col])
+        local_idx = int(row[idx_col])
+        target = maps.setdefault(node_type, {})
+        for col in key_cols:
+            value = row.get(col)
+            if pd.isna(value):
+                continue
+            key = str(value)
+            target[key] = local_idx
+            # Also make integer-like values robust to CSV float/string coercion.
+            try:
+                as_float = float(value)
+                if as_float.is_integer():
+                    target[str(int(as_float))] = local_idx
+            except Exception:
+                pass
+
+    # Convenience aliases in case the export used lower/title variants.
+    for canonical in ["Compound", "Protein"]:
+        if canonical not in maps:
+            for k in list(maps.keys()):
+                if k.lower() == canonical.lower():
+                    maps[canonical] = maps[k]
+                    break
+
     return maps
 
 
