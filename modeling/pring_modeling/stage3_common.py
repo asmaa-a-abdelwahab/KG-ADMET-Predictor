@@ -609,14 +609,84 @@ def load_node_maps(stage_dir: Path) -> dict[str, dict[str, int]]:
     return maps
 
 
+def coerce_pair_label(value) -> float | None:
+    """Convert Stage 3 pair labels to numeric binary labels.
+
+    Returns:
+        1.0 for curated active/potent evidence,
+        0.0 for curated inactive/weak evidence,
+        None for unknown/unobserved candidate pairs.
+    """
+    if value is None:
+        return None
+    try:
+        # Fast path for numeric values, but do not treat NaN as valid.
+        import math
+        f = float(value)
+        if math.isnan(f):
+            return None
+        if f == 1.0:
+            return 1.0
+        if f == 0.0:
+            return 0.0
+    except Exception:
+        pass
+
+    text = str(value).strip().lower()
+    if text in {"1", "1.0", "true", "t", "yes", "y", "positive", "pos", "active", "potent", "inhibitor"}:
+        return 1.0
+    if text in {"0", "0.0", "false", "f", "no", "n", "negative", "neg", "inactive", "weak", "non_active", "nonactive"}:
+        return 0.0
+    if text in {"", "nan", "none", "null", "na", "n/a", "unknown", "unobserved", "candidate", "missing"}:
+        return None
+
+    # Support longer semantic labels from export metadata.
+    if "active" in text or "potent" in text:
+        return 1.0
+    if "inactive" in text or "weak" in text:
+        return 0.0
+    if "unknown" in text or "unobserved" in text or "candidate" in text:
+        return None
+    return None
+
+
+def filter_supervised_pairs(df: pd.DataFrame, y_col: str) -> pd.DataFrame:
+    """Keep only binary-supervised Stage 3 pairs and normalize label to 0/1.
+
+    Unknown pairs are valid for candidate scoring but must not enter training,
+    validation, or test loss/metrics.
+    """
+    out = df.copy()
+    out["label"] = out[y_col].map(coerce_pair_label)
+    out = out[out["label"].isin([0.0, 1.0])].copy()
+    out["label"] = out["label"].astype(float)
+    return out
+
+
 def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # Prefer explicitly supervised training pairs, then fall back to broader
+    # link-prediction files after filtering out unknown candidate labels.
     split_candidates = [
+        stage_dir / "compound_target_training_pairs.csv",
+        stage_dir / "pyg_export" / "compound_target_training_pairs.csv",
         stage_dir / "compound_target_link_prediction_pairs.csv",
         stage_dir / "pyg_export" / "compound_target_link_prediction_pairs.csv",
     ]
     split_path = next((p for p in split_candidates if p.exists()), None)
     if split_path:
-        df = read_pairs(split_path)
+        raw_df = read_pairs(split_path)
+        y_col = pick_col(raw_df, ["label", "y", "is_positive", "positive"], required=False)
+        if not y_col:
+            raise KeyError(f"No label column found in {split_path}. Available: {list(raw_df.columns)}")
+
+        df = filter_supervised_pairs(raw_df, y_col)
+        if df.empty:
+            raise ValueError(
+                f"No binary supervised Stage 3 pairs were found in {split_path}. "
+                "Labels must contain 1/0, active/inactive, or equivalent values. "
+                "Unknown candidate pairs are intentionally excluded from training."
+            )
+
         split_col = pick_col(df, ["split", "set", "partition"], required=False)
         if split_col:
             split = df[split_col].astype(str).str.lower()
@@ -625,10 +695,11 @@ def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFr
             test = df[split.eq("test")].copy()
             if len(train) and len(valid) and len(test):
                 return train, valid, test
-        y_col = pick_col(df, ["label", "y", "is_positive", "positive"])
-        stratify = df[y_col] if df[y_col].nunique() == 2 else None
+
+        stratify = df["label"] if df["label"].nunique() == 2 else None
         train, tmp = train_test_split(df, test_size=0.30, stratify=stratify, random_state=seed)
-        valid, test = train_test_split(tmp, test_size=0.50, stratify=tmp[y_col] if tmp[y_col].nunique() == 2 else None, random_state=seed)
+        tmp_stratify = tmp["label"] if tmp["label"].nunique() == 2 else None
+        valid, test = train_test_split(tmp, test_size=0.50, stratify=tmp_stratify, random_state=seed)
         return train.copy(), valid.copy(), test.copy()
 
     pos_path = stage_dir / "positive_compound_target_pairs.csv"
@@ -636,7 +707,7 @@ def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFr
     if not pos_path.exists() or not neg_path.exists():
         raise FileNotFoundError(f"No Stage 3 pair file found under {stage_dir}")
     pos = read_pairs(pos_path); neg = read_pairs(neg_path)
-    pos["label"] = 1; neg["label"] = 0
+    pos["label"] = 1.0; neg["label"] = 0.0
     df = pd.concat([pos, neg], ignore_index=True)
     train, tmp = train_test_split(df, test_size=0.30, stratify=df["label"], random_state=seed)
     valid, test = train_test_split(tmp, test_size=0.50, stratify=tmp["label"], random_state=seed)
@@ -672,8 +743,9 @@ def encode_pairs(df: pd.DataFrame, node_maps: dict[str, dict[str, int]]) -> tupl
         p_key = next((v for v in p_candidates if v in protein_map), None)
         if c_key is None or p_key is None:
             continue
+        label_value = coerce_pair_label(row[y_col]) if y_col else None
         c_idx.append(compound_map[c_key]); p_idx.append(protein_map[p_key])
-        y.append(float(row[y_col]) if y_col else -1.0)
+        y.append(float(label_value) if label_value is not None else -1.0)
         kept.append(idx)
     if not kept:
         raise ValueError("No pairs could be mapped to local Compound/Protein indices.")
