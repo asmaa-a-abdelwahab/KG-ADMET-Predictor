@@ -17,9 +17,20 @@ except Exception:  # pragma: no cover
     LinkNeighborLoader = None  # type: ignore
     RGCNConv = None  # type: ignore
 
-from .common import binary_metrics, ensure_dir, get_device, save_json, set_seed
+from .common import ensure_dir, get_device, save_json, set_seed
 from .neo4j_export import export_predictions_dataframe
 from .stage3_common import encode_pairs, load_candidate_pairs, load_heterodata, load_node_maps, load_pairs, resolve_stage3_dir
+from .stage3_training_utils import (
+    amp_autocast,
+    extended_binary_metrics,
+    label_stats,
+    make_grad_scaler,
+    maybe_balance_training_tensors,
+    metric_for_checkpoint,
+    optimize_threshold,
+    resolve_class_weights,
+    weighted_or_focal_loss,
+)
 
 TARGET_EDGE_TYPE = ("Compound", "stage3_supervision", "Protein")
 
@@ -210,20 +221,23 @@ def _make_loader(data, c_idx, p_idx, y, args, shuffle: bool):
     )
 
 
-def _run_epoch(model, loader, optim, device, use_amp: bool = False) -> float:
+def _run_epoch(model, loader, optim, device, args, class_weights: dict[int, float]) -> float:
     model.train()
     total = 0.0
     n_total = 0
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and str(device).startswith("cuda"))
+    scaler = make_grad_scaler(device, args.amp)
     for batch in loader:
         batch = batch.to(device)
         y = batch[TARGET_EDGE_TYPE].edge_label.float().to(device)
         optim.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(enabled=use_amp and str(device).startswith("cuda")):
+        with amp_autocast(device, args.amp):
             z, offsets = model.encode_batch(batch)
             logits = model.score_supervision_edges(z, offsets, batch)
-            loss = F.binary_cross_entropy_with_logits(logits, y)
+            loss = weighted_or_focal_loss(logits, y, args, class_weights)
         scaler.scale(loss).backward()
+        if float(args.grad_clip) > 0:
+            scaler.unscale_(optim)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(args.grad_clip))
         scaler.step(optim)
         scaler.update()
         total += float(loss.item()) * y.numel()
@@ -239,7 +253,7 @@ def _predict(model, loader, device, use_amp: bool = False) -> tuple[torch.Tensor
         for batch in loader:
             batch = batch.to(device)
             y = batch[TARGET_EDGE_TYPE].edge_label.float().cpu()
-            with torch.cuda.amp.autocast(enabled=use_amp and str(device).startswith("cuda")):
+            with amp_autocast(device, use_amp):
                 z, offsets = model.encode_batch(batch)
                 logits = model.score_supervision_edges(z, offsets, batch)
                 score = torch.sigmoid(logits).detach().cpu()
@@ -271,6 +285,11 @@ def run(args: argparse.Namespace) -> dict:
         c_va, p_va, y_va, _ = encode_pairs(valid_df, node_maps)
         c_te, p_te, y_te, test_kept = encode_pairs(test_df, node_maps)
 
+        train_label_stats_before = label_stats(y_tr)
+        c_tr, p_tr, y_tr, balance_info = maybe_balance_training_tensors(c_tr, p_tr, y_tr, args)
+        train_label_stats_after = label_stats(y_tr)
+        class_weights = resolve_class_weights(y_tr, args)
+
         train_loader = _make_loader(data, c_tr, p_tr, y_tr, args, shuffle=True)
         valid_loader = _make_loader(data, c_va, p_va, y_va, args, shuffle=False)
         test_loader = _make_loader(data, c_te, p_te, y_te, args, shuffle=False)
@@ -296,26 +315,56 @@ def run(args: argparse.Namespace) -> dict:
             "feature_dims": _feature_dims(data),
             "relation_to_id": {"|".join(k): v for k, v in relation_to_id.items()},
             "args": vars(args),
+            "train_label_stats_before": train_label_stats_before,
+            "train_label_stats_after": train_label_stats_after,
+            "balance_info": balance_info,
+            "class_weights": class_weights,
         }, out_dir / "rgcn_sampled_metadata.json")
 
-        best_ap = -1.0
+        best_score = float("-inf")
+        best_threshold = float(args.threshold)
+        best_epoch = 0
+        bad_epochs = 0
         history = []
         for epoch in range(1, args.epochs + 1):
-            loss = _run_epoch(model, train_loader, optim, device, args.amp)
+            loss = _run_epoch(model, train_loader, optim, device, args, class_weights)
             val_score, val_y = _predict(model, valid_loader, device, args.amp)
-            val_metrics = binary_metrics(val_y.numpy(), val_score.numpy(), threshold=args.threshold)
+            if args.threshold_selection == "fixed":
+                epoch_threshold = float(args.threshold)
+                val_metrics = extended_binary_metrics(val_y.numpy(), val_score.numpy(), threshold=epoch_threshold)
+            else:
+                epoch_threshold, val_metrics = optimize_threshold(val_y.numpy(), val_score.numpy(), metric=args.threshold_selection)
             row = {"epoch": epoch, "loss": loss, **{f"valid_{k}": v for k, v in val_metrics.items()}}
             history.append(row)
-            ap = float(val_metrics.get("average_precision") or -1.0)
-            if ap > best_ap:
-                best_ap = ap
-                torch.save({"model_state": model.state_dict(), "args": vars(args)}, out_dir / "best_model.pt")
-            print(f"epoch={epoch:03d} loss={loss:.4f} valid={val_metrics}")
+            checkpoint_score = metric_for_checkpoint(val_metrics, args.early_stopping_metric)
+            improved = checkpoint_score > (best_score + float(args.min_delta))
+            if improved:
+                best_score = checkpoint_score
+                best_threshold = float(epoch_threshold)
+                best_epoch = epoch
+                bad_epochs = 0
+                torch.save({
+                    "model_state": model.state_dict(),
+                    "args": vars(args),
+                    "best_epoch": best_epoch,
+                    "best_threshold": best_threshold,
+                    "best_validation_metrics": val_metrics,
+                    "class_weights": class_weights,
+                    "balance_info": balance_info,
+                }, out_dir / "best_model.pt")
+            else:
+                bad_epochs += 1
+            print(f"epoch={epoch:03d} loss={loss:.4f} threshold={epoch_threshold:.2f} checkpoint_{args.early_stopping_metric}={checkpoint_score:.4f} valid={val_metrics}")
+            if int(args.patience) > 0 and bad_epochs >= int(args.patience):
+                print(f"Early stopping at epoch {epoch}; best_epoch={best_epoch}, best_threshold={best_threshold:.2f}, best_score={best_score:.4f}")
+                break
 
         ckpt = torch.load(out_dir / "best_model.pt", map_location=device)
         model.load_state_dict(ckpt["model_state"])
+        best_threshold = float(ckpt.get("best_threshold", best_threshold))
+        best_epoch = int(ckpt.get("best_epoch", best_epoch))
         test_score, test_y = _predict(model, test_loader, device, args.amp)
-        metrics = binary_metrics(test_y.numpy(), test_score.numpy(), threshold=args.threshold)
+        metrics = extended_binary_metrics(test_y.numpy(), test_score.numpy(), threshold=best_threshold)
 
         cand_df = load_candidate_pairs(stage_dir)
         if cand_df is not None and args.score_candidates:
@@ -328,7 +377,8 @@ def run(args: argparse.Namespace) -> dict:
         pd.DataFrame(history).to_csv(out_dir / "training_history.csv", index=False)
         preds = score_rows.copy().reset_index(drop=True)
         preds["score"] = score.numpy()
-        preds["predicted_label"] = (score.numpy() >= args.threshold).astype(int)
+        preds["predicted_label"] = (score.numpy() >= best_threshold).astype(int)
+        preds["decision_threshold"] = best_threshold
         preds["model"] = "stage3_rgcn_sampled"
         preds["stage"] = "Stage 3 — sampled R-GCN"
         preds.to_csv(out_dir / "predictions.csv", index=False)
@@ -343,6 +393,12 @@ def run(args: argparse.Namespace) -> dict:
             "predictions_file": str(out_dir / "predictions.csv"),
             "model_file": str(out_dir / "best_model.pt"),
             "training_history_file": str(out_dir / "training_history.csv"),
+            "best_epoch": int(best_epoch),
+            "selected_threshold": float(best_threshold),
+            "early_stopping_metric": args.early_stopping_metric,
+            "threshold_selection": args.threshold_selection,
+            "class_weights": class_weights,
+            "balance_info": balance_info,
         }
         if args.export_neo4j:
             summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage3_rgcn_sampled", max_rows=args.max_neo4j_predictions)
@@ -367,7 +423,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--loss", choices=["bce", "weighted_bce", "focal"], default="weighted_bce")
+    parser.add_argument("--class-weighting", choices=["none", "balanced", "negative_ratio"], default="balanced")
+    parser.add_argument("--negative-class-weight", type=float, default=None, help="Manual weight for label 0 inactive/weak examples.")
+    parser.add_argument("--positive-class-weight", type=float, default=None, help="Manual weight for label 1 active examples.")
+    parser.add_argument("--balanced-batches", action="store_true", help="Oversample minority supervision class during training.")
+    parser.add_argument("--balance-ratio", type=float, default=1.0, help="Target negative:positive ratio when --balanced-batches is enabled.")
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument("--focal-alpha", type=float, default=-1.0, help="Optional focal alpha for positives. Use -1 to disable alpha.")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold-selection", choices=["fixed", "mcc", "balanced_accuracy", "f1"], default="mcc")
+    parser.add_argument("--early-stopping-metric", choices=["mcc", "balanced_accuracy", "roc_auc", "average_precision", "f1"], default="mcc")
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
     parser.add_argument("--num-workers", type=int, default=0)

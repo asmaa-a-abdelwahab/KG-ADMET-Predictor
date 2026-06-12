@@ -9,19 +9,14 @@ tabulate>=0.9
 pyarrow>=14.0
 tqdm>=4.66
 jinja2>=3.1
-
-# Core PyTorch/PyG
-# CPU/GPU wheels are resolved by the build/runtime environment.
-# For GPU clusters, install the CUDA-matched torch/PyG wheels first.
+# CPU/GPU wheels are resolved by pip from the build environment.
+# For GPU clusters, install the torch/PyG wheels matching CUDA before this file.
 torch>=2.2
 torch-geometric>=2.6
-
-# Required for PyG LinkNeighborLoader / NeighborSampler in Stage 3 sampled R-GCN/HGT.
-# These often need CUDA/PyTorch-specific wheels from https://data.pyg.org.
-# For your HPC torch 2.5.1+cu124 environment, install requirements-pyg-cu124.txt.
+# Required by PyG LinkNeighborLoader/NeighborSampler used in sampled Stage 3 R-GCN/HGT.
+# These may need CUDA/PyTorch-specific wheels from https://data.pyg.org.
 pyg_lib
 torch_sparse
-
 graphdatascience>=1.10
 captum>=0.7
 shap>=0.45
