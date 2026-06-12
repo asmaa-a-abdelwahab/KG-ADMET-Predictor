@@ -13,6 +13,12 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from .common import (
     STAGE2,
@@ -20,6 +26,8 @@ from .common import (
     binary_metrics,
     ensure_dir,
     get_device,
+    coerce_binary_label,
+    optimize_binary_threshold,
     read_table,
     read_triples,
     resolve_stage_dir,
@@ -343,6 +351,245 @@ def score_triples_file_fast(
     return out.reset_index(drop=True)
 
 
+
+
+# -----------------------------------------------------------------------------
+# Evaluation exports and supervised CYP450 decoder
+# -----------------------------------------------------------------------------
+
+def _score_eval_with_random_negatives(model, triples: torch.LongTensor, num_entities: int, device, batch_size: int, negatives_per_positive: int, max_eval_triples: int, seed: int) -> tuple[pd.DataFrame, dict]:
+    """Export the exact positive/random-negative KGE evaluation rows.
+
+    Raw KGE objectives are not calibrated binary classifiers.  This export makes
+    the score direction, thresholds, and score distributions auditable instead
+    of only reporting aggregate metrics.
+    """
+    if triples is None or len(triples) == 0:
+        return pd.DataFrame(columns=["head_id", "relation_id", "tail_id", "label", "raw_score", "score", "score_inverted"]), {}
+    if max_eval_triples and max_eval_triples > 0 and len(triples) > max_eval_triples:
+        g = torch.Generator(device="cpu")
+        g.manual_seed(seed)
+        idx = torch.randperm(len(triples), generator=g)[:max_eval_triples]
+        triples = triples[idx]
+    frames = []
+    pos_raw = _score_encoded(model, triples, device, batch_size)
+    frames.append(pd.DataFrame({
+        "head_id": triples[:, 0].numpy(),
+        "relation_id": triples[:, 1].numpy(),
+        "tail_id": triples[:, 2].numpy(),
+        "label": 1,
+        "raw_score": pos_raw,
+    }))
+    for _ in range(max(1, int(negatives_per_positive))):
+        neg = corrupt_triples(triples.clone(), num_entities)
+        neg_raw = _score_encoded(model, neg, device, batch_size)
+        frames.append(pd.DataFrame({
+            "head_id": neg[:, 0].numpy(),
+            "relation_id": neg[:, 1].numpy(),
+            "tail_id": neg[:, 2].numpy(),
+            "label": 0,
+            "raw_score": neg_raw,
+        }))
+    out = pd.concat(frames, ignore_index=True)
+    out["score"] = sigmoid_np(out["raw_score"].to_numpy())
+    out["score_inverted"] = 1.0 - out["score"]
+    th, metrics = optimize_binary_threshold(out["label"].to_numpy(), out["score"].to_numpy(), metric="mcc")
+    inv_th, inv_metrics = optimize_binary_threshold(out["label"].to_numpy(), out["score_inverted"].to_numpy(), metric="mcc")
+    metrics = dict(metrics)
+    metrics["selected_threshold"] = float(th)
+    metrics["roc_auc_inverted"] = inv_metrics.get("roc_auc")
+    metrics["average_precision_inverted"] = inv_metrics.get("average_precision")
+    metrics["selected_threshold_inverted"] = float(inv_th)
+    metrics["score_mean_positive"] = float(out.loc[out["label"] == 1, "score"].mean())
+    metrics["score_mean_negative"] = float(out.loc[out["label"] == 0, "score"].mean())
+    metrics["score_direction_warning"] = bool((inv_metrics.get("roc_auc") or 0) > ((metrics.get("roc_auc") or 0) + 0.05))
+    return out, metrics
+
+
+def _entity_vectors_for_ids(model, ids: torch.LongTensor, device, batch_size: int = 65536) -> np.ndarray:
+    parts = []
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, len(ids), batch_size):
+            b = ids[start:start + batch_size].to(device)
+            if hasattr(model, "entity"):
+                x = model.entity(b)
+            elif hasattr(model, "entity_re") and hasattr(model, "entity_im"):
+                x = torch.cat([model.entity_re(b), model.entity_im(b)], dim=-1)
+            else:
+                raise TypeError(f"Unsupported KGE model type for embedding extraction: {type(model)}")
+            parts.append(x.detach().cpu().float())
+    return torch.cat(parts, dim=0).numpy() if parts else np.empty((0, 0), dtype=np.float32)
+
+
+def _build_pair_features(model, encoded: torch.LongTensor, device, batch_size: int) -> np.ndarray:
+    h = _entity_vectors_for_ids(model, encoded[:, 0].cpu(), device, batch_size=batch_size)
+    t = _entity_vectors_for_ids(model, encoded[:, 2].cpu(), device, batch_size=batch_size)
+    raw = _score_encoded(model, encoded, device, batch_size=batch_size).reshape(-1, 1).astype("float32")
+    return np.concatenate([h, t, np.abs(h - t), h * t, raw, sigmoid_np(raw).reshape(-1, 1)], axis=1).astype("float32", copy=False)
+
+
+def _find_supervised_pair_file(modeling_root: Path) -> Path | None:
+    candidates = [
+        modeling_root / "stage3_heterogeneous_gnn" / "compound_target_link_prediction_pairs.csv",
+        modeling_root / "stage3_heterogeneous_gnn" / "pyg_export" / "compound_target_link_prediction_pairs.csv",
+        modeling_root / "stage3_heterogeneous_gnn" / "training_pairs.csv",
+        modeling_root / "stage3_heterogeneous_gnn" / "link_prediction_pairs.csv",
+        modeling_root / "stage1_neo4j_gds_baselines" / "compound_target_training_pairs_for_gds.csv",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    hits = list((modeling_root / "stage3_heterogeneous_gnn").glob("*pair*.csv")) if (modeling_root / "stage3_heterogeneous_gnn").exists() else []
+    return sorted(hits)[0] if hits else None
+
+
+def _load_supervised_pairs(modeling_root: Path) -> tuple[pd.DataFrame, Path | None]:
+    path = _find_supervised_pair_file(modeling_root)
+    if path is None:
+        return pd.DataFrame(), None
+    df = read_table(path)
+    if "label" not in df.columns:
+        return pd.DataFrame(), path
+    y = coerce_binary_label(df["label"])
+    df = df.loc[y.isin([0.0, 1.0])].copy()
+    df["_label"] = y.loc[df.index].astype(int)
+    return df.reset_index(drop=True), path
+
+
+def _pair_entity_col(df: pd.DataFrame, kind: str) -> str | None:
+    if kind == "compound":
+        cols = ["compound_node_ref", "compound_entity_id", "compound", "head", "source", "compound_node_id"]
+    else:
+        cols = ["protein_node_ref", "protein_entity_id", "protein", "tail", "target", "protein_node_id"]
+    for c in cols:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _pairs_to_triples(df: pd.DataFrame, relation: str) -> pd.DataFrame:
+    c_col = _pair_entity_col(df, "compound")
+    p_col = _pair_entity_col(df, "protein")
+    if not c_col or not p_col:
+        raise KeyError("Could not identify compound/protein columns for supervised Stage 2 decoder.")
+    head = df[c_col].astype(str)
+    tail = df[p_col].astype(str)
+    # Stage 2 entity IDs commonly use n{node_id}; convert numeric Stage 3 node IDs.
+    if c_col.endswith("node_id"):
+        head = "n" + head.str.replace(r"^n", "", regex=True)
+    if p_col.endswith("node_id"):
+        tail = "n" + tail.str.replace(r"^n", "", regex=True)
+    return pd.DataFrame({"head": head, "relation": relation, "tail": tail})
+
+
+def _split_supervised_pairs(df: pd.DataFrame, seed: int):
+    split_col = next((c for c in ["split", "split_group", "stage_use"] if c in df.columns), None)
+    if split_col:
+        s = df[split_col].astype(str).str.lower()
+        train = df[s.str.contains("train")].copy()
+        valid = df[s.str.contains("valid|val")].copy()
+        test = df[s.str.contains("test")].copy()
+        if len(train) and len(test):
+            if len(valid) == 0:
+                train, valid = train_test_split(train, test_size=0.15, stratify=train["_label"], random_state=seed)
+            return train.reset_index(drop=True), valid.reset_index(drop=True), test.reset_index(drop=True)
+    train_val, test = train_test_split(df, test_size=0.2, stratify=df["_label"], random_state=seed)
+    train, valid = train_test_split(train_val, test_size=0.2, stratify=train_val["_label"], random_state=seed)
+    return train.reset_index(drop=True), valid.reset_index(drop=True), test.reset_index(drop=True)
+
+
+def _make_decoder(name: str, seed: int, n_jobs: int):
+    name = (name or "hist_gradient_boosting").lower()
+    if name == "logistic_regression":
+        return Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("classifier", LogisticRegression(max_iter=2000, class_weight="balanced", n_jobs=n_jobs, random_state=seed)),
+        ])
+    if name == "random_forest":
+        return Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("classifier", RandomForestClassifier(n_estimators=300, min_samples_leaf=2, class_weight="balanced_subsample", n_jobs=n_jobs, random_state=seed)),
+        ])
+    if name == "extra_trees":
+        return Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("classifier", ExtraTreesClassifier(n_estimators=400, min_samples_leaf=2, class_weight="balanced", n_jobs=n_jobs, random_state=seed)),
+        ])
+    return Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("classifier", HistGradientBoostingClassifier(max_iter=250, learning_rate=0.04, l2_regularization=1e-3, random_state=seed)),
+    ])
+
+
+def train_supervised_kge_decoder(model, dataset: KGDataset, modeling_root: Path, relation_name: str, device, args: argparse.Namespace, out_dir: Path) -> dict:
+    pairs, pair_file = _load_supervised_pairs(modeling_root)
+    if pair_file is None or pairs.empty:
+        return {"status": "skipped", "reason": "no_binary_supervised_pair_file_found", "pair_file": str(pair_file) if pair_file else None}
+    train_df, valid_df, test_df = _split_supervised_pairs(pairs, args.seed)
+    relation_name = relation_name or next(iter(dataset.relation_to_id.keys()))
+
+    def encode_subset(frame: pd.DataFrame):
+        triples = _pairs_to_triples(frame, relation_name)
+        rows, enc = _encode_triples_frame(dataset, triples)
+        keep = rows.index.to_numpy()
+        # _encode_triples_frame resets index after filtering; rebuild mask more robustly by mapping manually.
+        h = triples["head"].map(dataset.entity_to_id)
+        r = triples["relation"].map(dataset.relation_to_id)
+        t = triples["tail"].map(dataset.entity_to_id)
+        mask = h.notna() & r.notna() & t.notna()
+        return frame.loc[mask.to_numpy()].reset_index(drop=True), enc
+
+    train_rows, train_enc = encode_subset(train_df)
+    valid_rows, valid_enc = encode_subset(valid_df)
+    test_rows, test_enc = encode_subset(test_df)
+    if len(train_enc) < 10 or len(valid_enc) < 2 or len(test_enc) < 2:
+        return {"status": "skipped", "reason": "too_few_encoded_supervised_pairs", "pair_file": str(pair_file), "encoded_train": len(train_enc), "encoded_valid": len(valid_enc), "encoded_test": len(test_enc)}
+
+    X_train = _build_pair_features(model, train_enc, device, args.score_batch_size)
+    X_valid = _build_pair_features(model, valid_enc, device, args.score_batch_size)
+    X_test = _build_pair_features(model, test_enc, device, args.score_batch_size)
+    y_train = train_rows["_label"].astype(int).to_numpy()
+    y_valid = valid_rows["_label"].astype(int).to_numpy()
+    y_test = test_rows["_label"].astype(int).to_numpy()
+
+    decoder = _make_decoder(args.supervised_decoder, args.seed, args.n_jobs)
+    decoder.fit(X_train, y_train)
+    valid_score = decoder.predict_proba(X_valid)[:, 1]
+    threshold, valid_metrics = optimize_binary_threshold(y_valid, valid_score, metric=args.supervised_threshold_selection)
+    test_score = decoder.predict_proba(X_test)[:, 1]
+    test_metrics = binary_metrics(y_test, test_score, threshold=threshold)
+    test_metrics["selected_threshold"] = float(threshold)
+    test_metrics["validation_roc_auc"] = valid_metrics.get("roc_auc")
+    test_metrics["validation_average_precision"] = valid_metrics.get("average_precision")
+    test_metrics["validation_mcc"] = valid_metrics.get("mcc")
+
+    pred = test_rows.copy()
+    pred["score"] = test_score
+    pred["predicted_label"] = (test_score >= threshold).astype(int)
+    pred["model"] = f"stage2_{args.model}_supervised_decoder"
+    pred["stage"] = "Stage 2 — supervised KGE decoder"
+    pred.to_csv(out_dir / "supervised_eval_predictions.csv", index=False)
+    joblib_path = out_dir / "supervised_decoder.joblib"
+    import joblib
+    joblib.dump(decoder, joblib_path)
+    return {
+        "status": "trained",
+        "pair_file": str(pair_file),
+        "decoder": args.supervised_decoder,
+        "relation": relation_name,
+        "train_rows": int(len(train_rows)),
+        "valid_rows": int(len(valid_rows)),
+        "test_rows": int(len(test_rows)),
+        "feature_dim": int(X_train.shape[1]),
+        "selected_threshold": float(threshold),
+        "metrics": test_metrics,
+        "predictions_file": str(out_dir / "supervised_eval_predictions.csv"),
+        "decoder_file": str(joblib_path),
+        **{f"supervised_{k}": v for k, v in test_metrics.items()},
+    }
+
 # -----------------------------------------------------------------------------
 # Main run
 # -----------------------------------------------------------------------------
@@ -485,6 +732,37 @@ def run(args: argparse.Namespace) -> dict:
             max_eval_triples=args.max_eval_triples,
             batch_size=args.score_batch_size,
         ) if test_triples is not None and len(test_triples) else {}
+
+        eval_pred_df = pd.DataFrame()
+        eval_export_metrics = {}
+        if args.export_eval_predictions and test_triples is not None and len(test_triples):
+            eval_pred_df, eval_export_metrics = _score_eval_with_random_negatives(
+                model,
+                test_triples,
+                len(dataset.entity_to_id),
+                device,
+                batch_size=args.score_batch_size,
+                negatives_per_positive=args.eval_negatives_per_positive,
+                max_eval_triples=args.max_eval_triples,
+                seed=args.seed,
+            )
+            eval_pred_df["model"] = f"stage2_{args.model}"
+            eval_pred_df["stage"] = "Stage 2 — KG embedding baseline"
+            eval_pred_df.to_csv(out_dir / "eval_predictions.csv", index=False)
+            metrics = eval_export_metrics or metrics
+
+        target_relation_name = None
+        if target_train is not None and len(target_train):
+            target_relation_name = str(target_train["relation"].iloc[0])
+        elif dataset.valid_df is not None and len(dataset.valid_df):
+            target_relation_name = str(dataset.valid_df["relation"].iloc[0])
+
+        supervised_decoder_summary = {"status": "disabled"}
+        if args.train_supervised_decoder:
+            supervised_decoder_summary = train_supervised_kge_decoder(
+                model, dataset, resolved.root, target_relation_name or "INTERACTS_WITH", device, args, out_dir
+            )
+
         pd.DataFrame(history).to_csv(out_dir / "training_history.csv", index=False)
 
         if args.save_mappings:
@@ -541,7 +819,9 @@ def run(args: argparse.Namespace) -> dict:
             "predictions_file": str(out_dir / "predictions.csv"),
             "model_file": str(out_dir / "best_model.pt"),
             "training_history_file": str(out_dir / "training_history.csv"),
-            "score_note": "KGE scores are rank scores; the exported score column is sigmoid(raw_score), not a calibrated probability.",
+            "eval_predictions_file": str(out_dir / "eval_predictions.csv") if (out_dir / "eval_predictions.csv").exists() else None,
+            "supervised_decoder": supervised_decoder_summary,
+            "score_note": "KGE scores are rank scores; the exported score column is sigmoid(raw_score), not a calibrated probability. Prefer supervised_decoder.metrics for active/inactive CYP450 classification.",
             "runtime_seconds": float(time.time() - t0),
             "config": {
                 "dim": args.dim,
@@ -554,6 +834,9 @@ def run(args: argparse.Namespace) -> dict:
                 "target_train_repeat": args.target_train_repeat,
                 "score_candidates": args.score_candidates,
                 "max_candidate_triples": args.max_candidate_triples,
+                "export_eval_predictions": args.export_eval_predictions,
+                "train_supervised_decoder": args.train_supervised_decoder,
+                "supervised_decoder": args.supervised_decoder,
             },
             "metrics": metrics,
             **{k: v for k, v in metrics.items()},
@@ -606,6 +889,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-delta", type=float, default=0.0)
     parser.add_argument("--max-eval-triples", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--max-grad-norm", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
@@ -613,6 +897,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bool_arg(parser, "--pin-memory", True, "Enable DataLoader pinned memory when using CUDA.")
     _add_bool_arg(parser, "--amp", False, "Use CUDA AMP. Disabled by default because sparse embedding optimizers do not benefit reliably.")
     _add_bool_arg(parser, "--score-candidates", False, "Score candidate target triples after training. This can be expensive for millions of candidates.")
+    _add_bool_arg(parser, "--export-eval-predictions", True, "Always export labelled positive/random-negative test evaluation rows to eval_predictions.csv.")
+    _add_bool_arg(parser, "--train-supervised-decoder", True, "Train a supervised CYP450 active/inactive decoder on KGE pair embeddings when labelled pair exports are available.")
+    parser.add_argument("--supervised-decoder", choices=["hist_gradient_boosting", "logistic_regression", "random_forest", "extra_trees"], default="hist_gradient_boosting")
+    parser.add_argument("--supervised-threshold-selection", choices=["mcc", "balanced_accuracy", "youden", "f1", "accuracy"], default="mcc")
     _add_bool_arg(parser, "--score-only", False, "Load a trained checkpoint and score/evaluate without training.")
     parser.add_argument("--load-model", default=None, help="Path to best_model.pt for --score-only mode.")
     _add_bool_arg(parser, "--sort-predictions", True, "Sort prediction rows by score before writing.")

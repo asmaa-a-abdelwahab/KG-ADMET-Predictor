@@ -187,6 +187,59 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float = 0
     return out
 
 
+def optimize_binary_threshold(y_true: np.ndarray, y_score: np.ndarray, metric: str = "mcc", grid_size: int = 101) -> tuple[float, dict[str, float | int | None]]:
+    """Select a probability/rank-score threshold on labelled data.
+
+    This is used for imbalanced CYP450 active/inactive evaluation where a fixed
+    threshold of 0.5 can be misleading. The selected threshold is intended for
+    reporting/evaluation only; KGE/GNN scores remain ranking scores unless
+    calibrated separately.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_score = np.asarray(y_score).astype(float)
+    if len(y_true) == 0:
+        return 0.5, binary_metrics(y_true, y_score, threshold=0.5)
+    finite = np.isfinite(y_score)
+    y_true = y_true[finite]
+    y_score = y_score[finite]
+    if len(y_true) == 0:
+        return 0.5, binary_metrics(y_true, y_score, threshold=0.5)
+    lo, hi = float(np.nanmin(y_score)), float(np.nanmax(y_score))
+    if lo == hi:
+        ths = np.array([lo], dtype=float)
+    else:
+        # Include quantiles as well as a linear grid so thresholds are useful
+        # for sharply concentrated scores.
+        linear = np.linspace(lo, hi, max(3, int(grid_size)))
+        quantiles = np.quantile(y_score, np.linspace(0.01, 0.99, max(3, int(grid_size))))
+        ths = np.unique(np.concatenate([linear, quantiles, np.array([0.5])]))
+    metric = (metric or "mcc").lower()
+    best_th = float(ths[0])
+    best_metrics = binary_metrics(y_true, y_score, threshold=best_th)
+    best_value = -float("inf")
+    for th in ths:
+        m = binary_metrics(y_true, y_score, threshold=float(th))
+        if metric in {"balanced_accuracy", "bal_acc"}:
+            value = m.get("balanced_accuracy")
+        elif metric in {"youden", "youden_j"}:
+            value = None
+            if m.get("recall") is not None and m.get("specificity") is not None:
+                value = float(m["recall"]) + float(m["specificity"]) - 1.0
+        elif metric == "f1":
+            value = m.get("f1")
+        elif metric == "accuracy":
+            value = m.get("accuracy")
+        else:
+            value = m.get("mcc")
+        value = -float("inf") if value is None else float(value)
+        if value > best_value:
+            best_value = value
+            best_th = float(th)
+            best_metrics = m
+    best_metrics["threshold_selection_metric"] = metric
+    return best_th, best_metrics
+
+
 def get_device(device: str | None = None):
     if torch is None:
         raise RuntimeError("PyTorch is not installed in this environment.")

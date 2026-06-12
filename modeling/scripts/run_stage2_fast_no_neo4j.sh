@@ -82,6 +82,10 @@ MAX_CANDIDATE_TRIPLES="${MODEL_MAX_CANDIDATE_TRIPLES:-100000}"
 PREDICTION_TOP_K="${MODEL_PREDICTION_TOP_K:-0}"
 SAVE_MAPPINGS="${MODEL_STAGE2_SAVE_MAPPINGS:-false}"
 ATTACH_ENTITY_REFS="${MODEL_STAGE2_ATTACH_ENTITY_REFS:-false}"
+EXPORT_EVAL_PREDICTIONS="${MODEL_STAGE2_EXPORT_EVAL_PREDICTIONS:-true}"
+TRAIN_SUPERVISED_DECODER="${MODEL_STAGE2_TRAIN_SUPERVISED_DECODER:-true}"
+SUPERVISED_DECODER="${MODEL_STAGE2_SUPERVISED_DECODER:-hist_gradient_boosting}"
+SUPERVISED_THRESHOLD_SELECTION="${MODEL_STAGE2_SUPERVISED_THRESHOLD_SELECTION:-mcc}"
 
 if [ "$DEVICE" = "auto" ]; then
   if python - <<'PY'
@@ -128,6 +132,10 @@ echo "MAX_CANDIDATE_TRIPLES:   $MAX_CANDIDATE_TRIPLES"
 echo "PREDICTION_TOP_K:        $PREDICTION_TOP_K"
 echo "SAVE_MAPPINGS:           $SAVE_MAPPINGS"
 echo "ATTACH_ENTITY_REFS:      $ATTACH_ENTITY_REFS"
+echo "EXPORT_EVAL_PRED:      $EXPORT_EVAL_PREDICTIONS"
+echo "TRAIN_SUPERV_DECODER:   $TRAIN_SUPERVISED_DECODER"
+echo "SUPERVISED_DECODER:     $SUPERVISED_DECODER"
+echo "SUPERV_THRESHOLD:       $SUPERVISED_THRESHOLD_SELECTION"
 echo "Neo4j:                   disabled"
 echo "============================================================"
 
@@ -158,10 +166,14 @@ ARGS=(
   --max-candidate-triples "$MAX_CANDIDATE_TRIPLES"
   --prediction-top-k "$PREDICTION_TOP_K"
   --device "$DEVICE"
+  --supervised-decoder "$SUPERVISED_DECODER"
+  --supervised-threshold-selection "$SUPERVISED_THRESHOLD_SELECTION"
 )
 
 if [ "$SPARSE_EMBEDDINGS" = "true" ]; then ARGS+=(--sparse-embeddings); else ARGS+=(--no-sparse-embeddings); fi
 if [ "$SCORE_CANDIDATES" = "true" ]; then ARGS+=(--score-candidates); else ARGS+=(--no-score-candidates); fi
+if [ "$EXPORT_EVAL_PREDICTIONS" = "true" ]; then ARGS+=(--export-eval-predictions); else ARGS+=(--no-export-eval-predictions); fi
+if [ "$TRAIN_SUPERVISED_DECODER" = "true" ]; then ARGS+=(--train-supervised-decoder); else ARGS+=(--no-train-supervised-decoder); fi
 if [ "$SCORE_ONLY" = "true" ]; then
   ARGS+=(--score-only)
   if [ -z "$LOAD_MODEL" ]; then

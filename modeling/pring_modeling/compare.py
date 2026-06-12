@@ -11,7 +11,7 @@ import pandas as pd
 
 from .common import ensure_dir, read_table
 
-PREFERRED_METRICS = ["average_precision", "roc_auc", "accuracy", "f1", "precision", "recall", "hits_at_1", "hits_at_5", "hits_at_10", "mrr"]
+PREFERRED_METRICS = ["mcc", "balanced_accuracy", "roc_auc", "average_precision", "specificity", "accuracy", "f1", "precision", "recall", "hits_at_1", "hits_at_5", "hits_at_10", "mrr"]
 
 
 def load_json(path: Path) -> Any:
@@ -70,7 +70,7 @@ def find_metric_files(paths: list[str], output_root: str | None) -> list[Path]:
     return unique
 
 
-def compare_metrics(runs: list[str], outputs_root: str | None, output_dir: str, primary_metric: str = "average_precision") -> pd.DataFrame:
+def compare_metrics(runs: list[str], outputs_root: str | None, output_dir: str, primary_metric: str = "mcc") -> pd.DataFrame:
     out_dir = ensure_dir(output_dir)
     metric_files = find_metric_files(runs, outputs_root)
     if not metric_files:
@@ -138,7 +138,7 @@ def visualize(comparison_csv: str, output_dir: str, metrics: list[str] | None = 
     out_dir = ensure_dir(output_dir)
     df = pd.read_csv(comparison_csv)
     image_files: list[Path] = []
-    for metric in (metrics or ["average_precision", "roc_auc", "accuracy", "f1"]):
+    for metric in (metrics or ["mcc", "balanced_accuracy", "roc_auc", "average_precision", "specificity", "f1"]):
         if metric not in df.columns:
             continue
         out_path = out_dir / f"comparison_{metric}.png"
@@ -184,7 +184,7 @@ def compare_prediction_scores(predictions: list[str], names: list[str] | None, o
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Compare and visualize PRING model results.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("metrics"); c.add_argument("--runs", nargs="*", default=[]); c.add_argument("--outputs-root"); c.add_argument("--output-dir", required=True); c.add_argument("--primary-metric", default="average_precision")
+    c = sub.add_parser("metrics"); c.add_argument("--runs", nargs="*", default=[]); c.add_argument("--outputs-root"); c.add_argument("--output-dir", required=True); c.add_argument("--primary-metric", default="mcc")
     v = sub.add_parser("visualize"); v.add_argument("--comparison-csv", required=True); v.add_argument("--output-dir", required=True); v.add_argument("--metrics", nargs="*")
     ps = sub.add_parser("predictions"); ps.add_argument("--predictions", nargs="+", required=True); ps.add_argument("--names", nargs="*"); ps.add_argument("--output-dir", required=True); ps.add_argument("--top-k", type=int, default=100)
     return p

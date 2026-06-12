@@ -24,7 +24,7 @@ def _metric_value(summary: dict[str, Any], primary_metric: str) -> float:
     binary metrics before returning -inf.
     """
     metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
-    candidates = [primary_metric, "average_precision", "roc_auc", "f1", "accuracy"]
+    candidates = [primary_metric, "mcc", "balanced_accuracy", "roc_auc", "average_precision", "specificity", "f1", "accuracy"]
     for key in candidates:
         value = summary.get(key, metrics.get(key))
         if value is None:
@@ -92,6 +92,8 @@ def _run_stage1_model(args: argparse.Namespace, root: Path, classifier: str, exp
         "--max-predictions-file-rows", str(args.max_predictions_file_rows),
         "--prediction-scope", args.prediction_scope,
         "--threshold", str(args.threshold),
+        "--threshold-selection", args.threshold_selection,
+        "--feature-policy", args.stage1_feature_policy,
         "--classifier", classifier,
         "--n-estimators", str(args.n_estimators),
         "--n-jobs", str(args.n_jobs),
@@ -128,25 +130,18 @@ def _run_stage2_model(args: argparse.Namespace, root: Path, model_name: str, exp
         "--eval-every", str(args.stage2_eval_every),
         "--patience", str(args.stage2_patience),
         "--checkpoint-metric", args.stage2_checkpoint_metric,
+        "--supervised-decoder", args.stage2_supervised_decoder,
+        "--supervised-threshold-selection", args.stage2_supervised_threshold_selection,
         "--num-workers", str(args.num_workers),
+        "--n-jobs", str(args.n_jobs),
         "--device", args.device,
     ]
-    if args.stage2_sparse_embeddings:
-        argv += ["--sparse-embeddings"]
-    else:
-        argv += ["--no-sparse-embeddings"]
-    if args.stage2_score_candidates:
-        argv += ["--score-candidates"]
-    else:
-        argv += ["--no-score-candidates"]
-    if args.stage2_save_mappings:
-        argv += ["--save-mappings"]
-    else:
-        argv += ["--no-save-mappings"]
-    if args.stage2_attach_entity_refs:
-        argv += ["--attach-entity-refs"]
-    else:
-        argv += ["--no-attach-entity-refs"]
+    argv += ["--sparse-embeddings"] if args.stage2_sparse_embeddings else ["--no-sparse-embeddings"]
+    argv += ["--score-candidates"] if args.stage2_score_candidates else ["--no-score-candidates"]
+    argv += ["--export-eval-predictions"] if args.stage2_export_eval_predictions else ["--no-export-eval-predictions"]
+    argv += ["--train-supervised-decoder"] if args.stage2_train_supervised_decoder else ["--no-train-supervised-decoder"]
+    argv += ["--save-mappings"] if args.stage2_save_mappings else ["--no-save-mappings"]
+    argv += ["--attach-entity-refs"] if args.stage2_attach_entity_refs else ["--no-attach-entity-refs"]
     if export_individual:
         argv += ["--export-neo4j", "--max-neo4j-predictions", str(args.max_neo4j_predictions)]
     return run(build_parser().parse_args(argv))
@@ -170,6 +165,14 @@ def _run_stage3_model(args: argparse.Namespace, root: Path, model_name: str, exp
         "--lr", str(args.lr),
         "--threshold", str(args.threshold),
         "--device", args.device,
+        "--num-neighbors", str(args.stage3_num_neighbors),
+        "--featureless-mode", args.stage3_featureless_mode,
+        "--loss", args.stage3_loss,
+        "--bpr-weight", str(args.stage3_bpr_weight),
+        "--class-weighting", args.stage3_class_weighting,
+        "--threshold-selection", args.threshold_selection,
+        "--early-stopping-metric", args.stage3_early_stopping_metric,
+        "--patience", str(args.stage3_patience),
     ]
     if model_name == "hgt":
         argv += ["--heads", str(args.hgt_heads)]
@@ -325,13 +328,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default=os.getenv("MODEL_OUTPUT_DIR", "/models"))
     p.add_argument("--report-dir", default=os.getenv("MODEL_REPORT_DIR", "/reports/modeling"))
     p.add_argument("--stages", nargs="+", default=_split_env("MODEL_STAGES", "stage1 stage2 stage3 stage4"), choices=["stage1", "stage2", "stage3", "stage4"])
-    p.add_argument("--primary-metric", default=os.getenv("MODEL_PRIMARY_METRIC", "average_precision"))
+    p.add_argument("--primary-metric", default=os.getenv("MODEL_PRIMARY_METRIC", "mcc"))
     p.add_argument("--continue-on-error", action="store_true", default=os.getenv("MODEL_CONTINUE_ON_ERROR", "true").lower() == "true")
 
     # Stage 1
     p.add_argument("--stage1-models", nargs="+", default=_split_env("MODEL_STAGE1_MODELS", "random_forest extra_trees"), choices=["random_forest", "extra_trees", "hist_gradient_boosting", "logistic_regression"])
     p.add_argument("--target-column", default=os.getenv("MODEL_TARGET_COLUMN", "label"))
     p.add_argument("--threshold", type=float, default=float(os.getenv("MODEL_THRESHOLD", "0.5")))
+    p.add_argument("--threshold-selection", default=os.getenv("MODEL_THRESHOLD_SELECTION", "mcc"), choices=["mcc", "balanced_accuracy", "youden", "f1", "accuracy"])
+    p.add_argument("--stage1-feature-policy", default=os.getenv("MODEL_STAGE1_FEATURE_POLICY", "leakage_safe"), choices=["leakage_safe", "structural_only", "allow_all"])
     p.add_argument("--max-training-rows", type=int, default=int(os.getenv("MODEL_MAX_TRAINING_ROWS", "0")))
     p.add_argument("--max-scoring-rows", type=int, default=int(os.getenv("MODEL_MAX_SCORING_ROWS", "0")))
     p.add_argument("--max-predictions-file-rows", type=int, default=int(os.getenv("MODEL_MAX_PREDICTIONS_FILE_ROWS", "0")))
@@ -360,6 +365,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stage2-score-candidates", action="store_true", default=os.getenv("MODEL_STAGE2_SCORE_CANDIDATES", os.getenv("MODEL_SCORE_CANDIDATES", "false")).lower() == "true")
     p.add_argument("--stage2-save-mappings", action="store_true", default=os.getenv("MODEL_STAGE2_SAVE_MAPPINGS", "false").lower() == "true")
     p.add_argument("--stage2-attach-entity-refs", action="store_true", default=os.getenv("MODEL_STAGE2_ATTACH_ENTITY_REFS", "false").lower() == "true")
+    p.add_argument("--stage2-export-eval-predictions", action="store_true", default=os.getenv("MODEL_STAGE2_EXPORT_EVAL_PREDICTIONS", "true").lower() == "true")
+    p.add_argument("--stage2-train-supervised-decoder", action="store_true", default=os.getenv("MODEL_STAGE2_TRAIN_SUPERVISED_DECODER", "true").lower() == "true")
+    p.add_argument("--stage2-supervised-decoder", default=os.getenv("MODEL_STAGE2_SUPERVISED_DECODER", "hist_gradient_boosting"), choices=["hist_gradient_boosting", "logistic_regression", "random_forest", "extra_trees"])
+    p.add_argument("--stage2-supervised-threshold-selection", default=os.getenv("MODEL_STAGE2_SUPERVISED_THRESHOLD_SELECTION", "mcc"), choices=["mcc", "balanced_accuracy", "youden", "f1", "accuracy"])
 
     # Stage 3
     p.add_argument("--stage3-models", nargs="+", default=_split_env("MODEL_STAGE3_MODELS", "rgcn hgt"), choices=["rgcn", "hgt"])
@@ -371,6 +380,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hgt-heads", type=int, default=int(os.getenv("MODEL_HGT_HEADS", "2")))
     p.add_argument("--score-candidates", action="store_true", default=os.getenv("MODEL_SCORE_CANDIDATES", "true").lower() == "true")
     p.add_argument("--max-candidate-pairs", type=int, default=int(os.getenv("MODEL_MAX_CANDIDATE_PAIRS", "0")))
+    p.add_argument("--stage3-num-neighbors", type=int, default=int(os.getenv("MODEL_NUM_NEIGHBORS", "10")))
+    p.add_argument("--stage3-featureless-mode", default=os.getenv("MODEL_FEATURELESS_MODE", "type"), choices=["type", "zero", "none"])
+    p.add_argument("--stage3-loss", default=os.getenv("MODEL_LOSS", "weighted_bce_bpr"), choices=["bce", "weighted_bce", "focal", "bpr", "pairwise_bpr", "weighted_bce_bpr", "bce_bpr"])
+    p.add_argument("--stage3-bpr-weight", type=float, default=float(os.getenv("MODEL_BPR_WEIGHT", "0.5")))
+    p.add_argument("--stage3-class-weighting", default=os.getenv("MODEL_CLASS_WEIGHTING", "negative_ratio"), choices=["none", "balanced", "negative_ratio"])
+    p.add_argument("--stage3-early-stopping-metric", default=os.getenv("MODEL_EARLY_STOPPING_METRIC", "roc_auc"), choices=["roc_auc", "average_precision", "mcc", "balanced_accuracy", "f1", "loss"])
+    p.add_argument("--stage3-patience", type=int, default=int(os.getenv("MODEL_PATIENCE", "10")))
 
     # Shared torch
     p.add_argument("--batch-size", type=int, default=int(os.getenv("MODEL_BATCH_SIZE", "4096")))
