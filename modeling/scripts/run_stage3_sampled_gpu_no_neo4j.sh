@@ -54,7 +54,13 @@ BATCH_SIZE="${MODEL_BATCH_SIZE:-128}"
 DEVICE="${MODEL_DEVICE:-cuda}"
 FEATURELESS_MODE="${MODEL_FEATURELESS_MODE:-type}"
 HEADS="${MODEL_HGT_HEADS:-1}"
-AMP_FLAG="${MODEL_AMP:-true}"
+# R-GCN can use AMP, but HGTConv/pyg-lib grouped_matmul may fail with
+# Float/Half mismatch. Default HGT to FP32 unless explicitly overridden.
+DEFAULT_AMP="true"
+if [ "$MODEL_NAME" = "hgt" ]; then
+  DEFAULT_AMP="false"
+fi
+AMP_FLAG="${MODEL_AMP:-$DEFAULT_AMP}"
 SCORE_CANDIDATES="${MODEL_SCORE_CANDIDATES:-false}"
 MAX_CANDIDATE_PAIRS="${MODEL_MAX_CANDIDATE_PAIRS:-100000}"
 
@@ -67,6 +73,7 @@ NEGATIVE_CLASS_WEIGHT="${MODEL_NEGATIVE_CLASS_WEIGHT:-}" # optional manual label
 POSITIVE_CLASS_WEIGHT="${MODEL_POSITIVE_CLASS_WEIGHT:-}" # optional manual label-1 weight
 FOCAL_GAMMA="${MODEL_FOCAL_GAMMA:-2.0}"
 FOCAL_ALPHA="${MODEL_FOCAL_ALPHA:--1.0}"
+BPR_WEIGHT="${MODEL_BPR_WEIGHT:-0.5}"
 THRESHOLD="${MODEL_THRESHOLD:-0.5}"
 THRESHOLD_SELECTION="${MODEL_THRESHOLD_SELECTION:-mcc}"  # fixed, mcc, balanced_accuracy, f1
 EARLY_STOPPING_METRIC="${MODEL_EARLY_STOPPING_METRIC:-mcc}"
@@ -121,7 +128,9 @@ echo "NUM_NEIGHBORS:          $NUM_NEIGHBORS"
 echo "BATCH_SIZE:             $BATCH_SIZE"
 echo "DEVICE:                 $DEVICE"
 echo "FEATURELESS_MODE:       $FEATURELESS_MODE"
+echo "AMP_FLAG:               $AMP_FLAG"
 echo "LOSS:                   $LOSS"
+echo "BPR_WEIGHT:             $BPR_WEIGHT"
 echo "CLASS_WEIGHTING:        $CLASS_WEIGHTING"
 echo "BALANCED_BATCHES:       $BALANCED_BATCHES"
 echo "BALANCE_RATIO:          $BALANCE_RATIO"
@@ -146,6 +155,7 @@ COMMON_ARGS=(
   --balance-ratio "$BALANCE_RATIO"
   --focal-gamma "$FOCAL_GAMMA"
   --focal-alpha "$FOCAL_ALPHA"
+  --bpr-weight "$BPR_WEIGHT"
   --threshold "$THRESHOLD"
   --threshold-selection "$THRESHOLD_SELECTION"
   --early-stopping-metric "$EARLY_STOPPING_METRIC"

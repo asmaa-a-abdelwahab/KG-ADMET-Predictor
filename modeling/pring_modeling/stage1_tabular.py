@@ -8,8 +8,11 @@ from typing import Iterable
 import joblib
 import numpy as np
 import pandas as pd
-from loguru import logger
-from sklearn.ensemble import RandomForestClassifier
+from .logging_utils import get_logger
+
+logger = get_logger(__name__)
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, HistGradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -101,6 +104,64 @@ def make_feature_matrix(df: pd.DataFrame, feature_columns: list[str] | None = No
     return X, feature_columns
 
 
+def build_estimator(args: argparse.Namespace):
+    """Build the Stage 1 supervised baseline classifier.
+
+    The Stage 1 export can contain Neo4j GDS FastRP/GraphSAGE-derived
+    features plus pair/topological properties. Training multiple lightweight
+    classifiers over the same leakage-safe export lets the workflow select the
+    strongest Stage 1 baseline automatically.
+    """
+    if args.classifier == "extra_trees":
+        return ExtraTreesClassifier(
+            n_estimators=args.n_estimators,
+            min_samples_leaf=args.min_samples_leaf,
+            max_depth=args.max_depth,
+            n_jobs=args.n_jobs,
+            class_weight="balanced",
+            random_state=args.seed,
+        )
+    if args.classifier == "hist_gradient_boosting":
+        return HistGradientBoostingClassifier(
+            max_iter=args.n_estimators,
+            max_leaf_nodes=31 if args.max_depth is None else max(2, 2 ** min(args.max_depth, 10)),
+            learning_rate=0.05,
+            random_state=args.seed,
+        )
+    if args.classifier == "logistic_regression":
+        return LogisticRegression(
+            max_iter=1000,
+            n_jobs=args.n_jobs,
+            class_weight="balanced",
+            random_state=args.seed,
+        )
+    return RandomForestClassifier(
+        n_estimators=args.n_estimators,
+        min_samples_leaf=args.min_samples_leaf,
+        max_depth=args.max_depth,
+        n_jobs=args.n_jobs,
+        class_weight="balanced_subsample",
+        random_state=args.seed,
+    )
+
+
+def write_feature_importance(model: Pipeline, feature_columns: list[str], out_dir: Path) -> str | None:
+    clf = model.named_steps.get("classifier")
+    values = None
+    if hasattr(clf, "feature_importances_"):
+        values = getattr(clf, "feature_importances_")
+    elif hasattr(clf, "coef_"):
+        coef = getattr(clf, "coef_")
+        values = np.abs(coef[0] if getattr(coef, "ndim", 1) > 1 else coef)
+    if values is None or len(values) != len(feature_columns):
+        return None
+    fi = pd.DataFrame({"feature": feature_columns, "importance": values})
+    fi = fi.sort_values("importance", ascending=False).reset_index(drop=True)
+    path = out_dir / "feature_importance.csv"
+    fi.to_csv(path, index=False)
+    return str(path)
+
+
 def _read_candidate_rows(candidate_file: Path, max_rows: int) -> pd.DataFrame:
     if max_rows > 0:
         return read_table(candidate_file, nrows=max_rows)
@@ -140,14 +201,7 @@ def run(args: argparse.Namespace) -> dict:
         model = Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler(with_mean=False)),
-            ("classifier", RandomForestClassifier(
-                n_estimators=args.n_estimators,
-                min_samples_leaf=args.min_samples_leaf,
-                max_depth=args.max_depth,
-                n_jobs=args.n_jobs,
-                class_weight="balanced_subsample",
-                random_state=args.seed,
-            )),
+            ("classifier", build_estimator(args)),
         ])
         model.fit(X_train, y_train)
         test_score = model.predict_proba(X_test)[:, 1]
@@ -166,7 +220,7 @@ def run(args: argparse.Namespace) -> dict:
         preds = score_df[meta_cols].copy()
         preds["score"] = score
         preds["predicted_label"] = (score >= args.threshold).astype(int)
-        preds["model"] = "stage1_tabular_random_forest"
+        preds["model"] = f"stage1_tabular_{args.classifier}"
         preds["stage"] = "Stage 1 — Neo4j GDS/tabular baseline"
         preds = preds.sort_values("score", ascending=False).reset_index(drop=True)
         if args.max_predictions_file_rows > 0:
@@ -174,14 +228,15 @@ def run(args: argparse.Namespace) -> dict:
         else:
             preds_to_write = preds
 
-        model_path = out_dir / "stage1_tabular_random_forest.joblib"
+        model_path = out_dir / f"stage1_tabular_{args.classifier}.joblib"
         pred_path = out_dir / "predictions.csv"
         joblib.dump(model, model_path)
         preds_to_write.to_csv(pred_path, index=False)
         save_json(feature_columns, out_dir / "feature_columns.json")
+        feature_importance_file = write_feature_importance(model, feature_columns, out_dir)
         summary = {
             "stage": "Stage 1 — Neo4j GDS/tabular baseline",
-            "model": "stage1_tabular_random_forest",
+            "model": f"stage1_tabular_{args.classifier}",
             "status": "trained",
             "stage_dir": str(stage_dir),
             "training_file": str(train_file),
@@ -192,11 +247,13 @@ def run(args: argparse.Namespace) -> dict:
             "prediction_rows_written": int(len(preds_to_write)),
             "model_file": str(model_path),
             "predictions_file": str(pred_path),
+            "feature_importance_file": feature_importance_file,
             "metrics": metrics,
+            **{k: v for k, v in metrics.items()},
         }
         if args.export_neo4j:
             try:
-                summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage1_tabular_random_forest", max_rows=args.max_neo4j_predictions)
+                summary["neo4j_export"] = export_predictions_dataframe(preds, model_name=f"stage1_tabular_{args.classifier}", max_rows=args.max_neo4j_predictions)
             except Exception as exc:
                 summary["neo4j_export"] = {"exported": 0, "error": str(exc)}
         save_json(summary, out_dir / "metrics.json")
@@ -231,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-scoring-rows", type=int, default=100000)
     p.add_argument("--max-predictions-file-rows", type=int, default=100000)
     p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--classifier", choices=["random_forest", "extra_trees", "hist_gradient_boosting", "logistic_regression"], default="random_forest")
     p.add_argument("--test-size", type=float, default=0.25)
     p.add_argument("--n-estimators", type=int, default=200)
     p.add_argument("--min-samples-leaf", type=int, default=2)

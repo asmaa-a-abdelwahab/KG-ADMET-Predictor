@@ -207,3 +207,44 @@ For HPC/local non-Docker use:
 bash scripts/run_all_modeling_local.sh
 sbatch scripts/run_all_modeling_slurm.sh
 ```
+
+## Stage 3 sampled R-GCN/HGT for small-GPU HPC
+
+The Stage 3 R-GCN and HGT modules now use PyG `LinkNeighborLoader` mini-batch neighbor sampling by default. This avoids full-graph GPU encoding and is intended for clusters with limited GPU VRAM, such as 8 GB GPUs.
+
+Recommended first GPU run:
+
+```bash
+MODEL_STAGE3_MODEL=rgcn \
+MODEL_STAGE3_EPOCHS=20 \
+MODEL_HIDDEN_DIM=32 \
+MODEL_NUM_LAYERS=1 \
+MODEL_NUM_NEIGHBORS=10 \
+MODEL_BATCH_SIZE=256 \
+MODEL_FEATURELESS_MODE=type \
+MODEL_SCORE_CANDIDATES=false \
+sbatch modeling/scripts/run_stage3_sampled_gpu_no_neo4j.sh
+```
+
+Then test HGT:
+
+```bash
+MODEL_STAGE3_MODEL=hgt \
+MODEL_STAGE3_EPOCHS=20 \
+MODEL_HIDDEN_DIM=32 \
+MODEL_NUM_LAYERS=1 \
+MODEL_NUM_NEIGHBORS=10 \
+MODEL_BATCH_SIZE=128 \
+MODEL_HGT_HEADS=1 \
+MODEL_FEATURELESS_MODE=type \
+MODEL_SCORE_CANDIDATES=false \
+sbatch modeling/scripts/run_stage3_sampled_gpu_no_neo4j.sh
+```
+
+Candidate scoring is disabled by default in the sampled GPU script. Enable it only after training succeeds:
+
+```bash
+MODEL_SCORE_CANDIDATES=true MODEL_MAX_CANDIDATE_PAIRS=100000 sbatch modeling/scripts/run_stage3_sampled_gpu_no_neo4j.sh
+```
+
+For 8 GB GPUs, keep `MODEL_FEATURELESS_MODE=type` unless you specifically want global per-node embeddings and have enough VRAM.

@@ -286,9 +286,12 @@ def run(args: argparse.Namespace) -> dict:
         c_te, p_te, y_te, test_kept = encode_pairs(test_df, node_maps)
 
         train_label_stats_before = label_stats(y_tr)
+        # Compute class weights from the original training distribution, before any
+        # oversampling. Otherwise balanced-batch oversampling makes the weights
+        # collapse to 1:1 and the minority inactive/weak class remains under-penalized.
+        class_weights = resolve_class_weights(y_tr, args)
         c_tr, p_tr, y_tr, balance_info = maybe_balance_training_tensors(c_tr, p_tr, y_tr, args)
         train_label_stats_after = label_stats(y_tr)
-        class_weights = resolve_class_weights(y_tr, args)
 
         train_loader = _make_loader(data, c_tr, p_tr, y_tr, args, shuffle=True)
         valid_loader = _make_loader(data, c_va, p_va, y_va, args, shuffle=False)
@@ -424,17 +427,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--loss", choices=["bce", "weighted_bce", "focal"], default="weighted_bce")
+    parser.add_argument("--loss", choices=["bce", "weighted_bce", "focal", "bpr", "pairwise_bpr", "weighted_bce_bpr", "bce_bpr"], default="weighted_bce")
     parser.add_argument("--class-weighting", choices=["none", "balanced", "negative_ratio"], default="balanced")
     parser.add_argument("--negative-class-weight", type=float, default=None, help="Manual weight for label 0 inactive/weak examples.")
     parser.add_argument("--positive-class-weight", type=float, default=None, help="Manual weight for label 1 active examples.")
     parser.add_argument("--balanced-batches", action="store_true", help="Oversample minority supervision class during training.")
     parser.add_argument("--balance-ratio", type=float, default=1.0, help="Target negative:positive ratio when --balanced-batches is enabled.")
     parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument("--bpr-weight", type=float, default=0.5, help="Weight of pairwise BPR loss when --loss weighted_bce_bpr is used.")
     parser.add_argument("--focal-alpha", type=float, default=-1.0, help="Optional focal alpha for positives. Use -1 to disable alpha.")
     parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--threshold-selection", choices=["fixed", "mcc", "balanced_accuracy", "f1"], default="mcc")
-    parser.add_argument("--early-stopping-metric", choices=["mcc", "balanced_accuracy", "roc_auc", "average_precision", "f1"], default="mcc")
+    parser.add_argument("--threshold-selection", choices=["fixed", "mcc", "balanced_accuracy", "youden", "f1"], default="mcc")
+    parser.add_argument("--early-stopping-metric", choices=["mcc", "balanced_accuracy", "youden", "roc_auc", "average_precision", "f1"], default="mcc")
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)

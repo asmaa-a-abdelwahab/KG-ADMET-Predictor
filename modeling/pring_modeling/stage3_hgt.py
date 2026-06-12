@@ -33,6 +33,10 @@ from .stage3_training_utils import (
 
 TARGET_EDGE_TYPE = ("Compound", "stage3_supervision", "Protein")
 
+# HGTConv uses pyg-lib grouped_matmul, which can fail with mixed precision
+# on some CUDA/PyG builds (Float weights vs Half inputs). Keep HGT in FP32.
+HGT_ALLOW_AMP = False
+
 
 def _parse_num_neighbors(value: str | int, num_layers: int) -> list[int]:
     if isinstance(value, int):
@@ -179,7 +183,10 @@ def _run_epoch(model, loader, optim, device, args, class_weights: dict[int, floa
         batch = batch.to(device)
         y = batch[TARGET_EDGE_TYPE].edge_label.float().to(device)
         optim.zero_grad(set_to_none=True)
-        with amp_autocast(device, args.amp):
+        # Keep HGT in FP32. Mixed precision can make HGTConv/pyg-lib
+        # grouped_matmul receive Half inputs while its grouped weights remain Float.
+        # That produces: RuntimeError: expected scalar type Float but found Half.
+        with amp_autocast(device, False):
             z_dict = model.encode_batch(batch)
             logits = model.score_supervision_edges(z_dict, batch)
             loss = weighted_or_focal_loss(logits, y, args, class_weights)
@@ -202,7 +209,8 @@ def _predict(model, loader, device, use_amp: bool = False) -> tuple[torch.Tensor
         for batch in loader:
             batch = batch.to(device)
             y = batch[TARGET_EDGE_TYPE].edge_label.float().cpu()
-            with amp_autocast(device, use_amp):
+            # Keep HGT validation/scoring in FP32 for the same grouped_matmul reason.
+            with amp_autocast(device, False):
                 z_dict = model.encode_batch(batch)
                 logits = model.score_supervision_edges(z_dict, batch)
                 score = torch.sigmoid(logits).detach().cpu()
@@ -235,15 +243,20 @@ def run(args: argparse.Namespace) -> dict:
         c_te, p_te, y_te, test_kept = encode_pairs(test_df, node_maps)
 
         train_label_stats_before = label_stats(y_tr)
+        # Compute class weights from the original training distribution, before any
+        # oversampling. Otherwise balanced-batch oversampling makes the weights
+        # collapse to 1:1 and the minority inactive/weak class remains under-penalized.
+        class_weights = resolve_class_weights(y_tr, args)
         c_tr, p_tr, y_tr, balance_info = maybe_balance_training_tensors(c_tr, p_tr, y_tr, args)
         train_label_stats_after = label_stats(y_tr)
-        class_weights = resolve_class_weights(y_tr, args)
 
         train_loader = _make_loader(data, c_tr, p_tr, y_tr, args, shuffle=True)
         valid_loader = _make_loader(data, c_va, p_va, y_va, args, shuffle=False)
         test_loader = _make_loader(data, c_te, p_te, y_te, args, shuffle=False)
 
         device = get_device(args.device)
+        if args.amp:
+            print("WARNING: --amp was requested, but sampled HGT disables AMP internally to avoid pyg-lib grouped_matmul Float/Half dtype errors.")
         model = SampledHGTLinkPredictor(
             metadata=data.metadata(),
             node_counts=_node_counts(data),
@@ -265,6 +278,9 @@ def run(args: argparse.Namespace) -> dict:
             "train_label_stats_after": train_label_stats_after,
             "balance_info": balance_info,
             "class_weights": class_weights,
+            "requested_amp": bool(args.amp),
+            "effective_amp": False,
+            "amp_note": "Sampled HGT forces FP32 because HGTConv/pyg-lib grouped_matmul can fail with Float/Half dtype mismatch.",
         }, out_dir / "hgt_sampled_metadata.json")
 
         best_score = float("-inf")
@@ -344,6 +360,8 @@ def run(args: argparse.Namespace) -> dict:
             "threshold_selection": args.threshold_selection,
             "class_weights": class_weights,
             "balance_info": balance_info,
+            "requested_amp": bool(args.amp),
+            "effective_amp": False,
         }
         if args.export_neo4j:
             summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage3_hgt_sampled", max_rows=args.max_neo4j_predictions)
@@ -369,17 +387,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--loss", choices=["bce", "weighted_bce", "focal"], default="weighted_bce")
+    parser.add_argument("--loss", choices=["bce", "weighted_bce", "focal", "bpr", "pairwise_bpr", "weighted_bce_bpr", "bce_bpr"], default="weighted_bce")
     parser.add_argument("--class-weighting", choices=["none", "balanced", "negative_ratio"], default="balanced")
     parser.add_argument("--negative-class-weight", type=float, default=None, help="Manual weight for label 0 inactive/weak examples.")
     parser.add_argument("--positive-class-weight", type=float, default=None, help="Manual weight for label 1 active examples.")
     parser.add_argument("--balanced-batches", action="store_true", help="Oversample minority supervision class during training.")
     parser.add_argument("--balance-ratio", type=float, default=1.0, help="Target negative:positive ratio when --balanced-batches is enabled.")
     parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument("--bpr-weight", type=float, default=0.5, help="Weight of pairwise BPR loss when --loss weighted_bce_bpr is used.")
     parser.add_argument("--focal-alpha", type=float, default=-1.0, help="Optional focal alpha for positives. Use -1 to disable alpha.")
     parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--threshold-selection", choices=["fixed", "mcc", "balanced_accuracy", "f1"], default="mcc")
-    parser.add_argument("--early-stopping-metric", choices=["mcc", "balanced_accuracy", "roc_auc", "average_precision", "f1"], default="mcc")
+    parser.add_argument("--threshold-selection", choices=["fixed", "mcc", "balanced_accuracy", "youden", "f1"], default="mcc")
+    parser.add_argument("--early-stopping-metric", choices=["mcc", "balanced_accuracy", "youden", "roc_auc", "average_precision", "f1"], default="mcc")
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)

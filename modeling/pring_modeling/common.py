@@ -20,9 +20,9 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
 try:
-    from sklearn.metrics import average_precision_score, roc_auc_score, accuracy_score, f1_score, precision_score, recall_score
+    from sklearn.metrics import average_precision_score, roc_auc_score, accuracy_score, f1_score, precision_score, recall_score, balanced_accuracy_score, matthews_corrcoef, confusion_matrix
 except Exception:  # pragma: no cover
-    average_precision_score = roc_auc_score = accuracy_score = f1_score = precision_score = recall_score = None
+    average_precision_score = roc_auc_score = accuracy_score = f1_score = precision_score = recall_score = balanced_accuracy_score = matthews_corrcoef = confusion_matrix = None
 
 STAGE1 = "stage1_neo4j_gds_baselines"
 STAGE2 = "stage2_kg_embedding_baselines"
@@ -143,12 +143,17 @@ def coerce_binary_label(series: pd.Series) -> pd.Series:
     return series.map(convert)
 
 
-def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float = 0.5) -> dict[str, float | None]:
+def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float = 0.5) -> dict[str, float | int | None]:
     y_true = np.asarray(y_true).astype(int)
     y_score = np.asarray(y_score).astype(float)
-    out: dict[str, float | None] = {}
+    out: dict[str, float | int | None] = {}
     if len(y_true) == 0:
-        return {"roc_auc": None, "average_precision": None, "accuracy": None, "f1": None, "precision": None, "recall": None}
+        return {
+            "roc_auc": None, "average_precision": None, "accuracy": None,
+            "f1": None, "precision": None, "recall": None,
+            "balanced_accuracy": None, "mcc": None, "specificity": None,
+            "threshold": float(threshold),
+        }
     if roc_auc_score is not None and len(np.unique(y_true)) == 2:
         out["roc_auc"] = float(roc_auc_score(y_true, y_score))
     else:
@@ -158,11 +163,27 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float = 0
     else:
         out["average_precision"] = None
     y_pred = (y_score >= threshold).astype(int)
+    out["threshold"] = float(threshold)
     if accuracy_score is not None:
         out["accuracy"] = float(accuracy_score(y_true, y_pred))
         out["f1"] = float(f1_score(y_true, y_pred, zero_division=0))
         out["precision"] = float(precision_score(y_true, y_pred, zero_division=0))
         out["recall"] = float(recall_score(y_true, y_pred, zero_division=0))
+        if len(np.unique(y_true)) == 2:
+            out["balanced_accuracy"] = float(balanced_accuracy_score(y_true, y_pred)) if balanced_accuracy_score is not None else None
+            out["mcc"] = float(matthews_corrcoef(y_true, y_pred)) if matthews_corrcoef is not None else None
+            if confusion_matrix is not None:
+                tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+                out["tn"] = int(tn)
+                out["fp"] = int(fp)
+                out["fn"] = int(fn)
+                out["tp"] = int(tp)
+                out["specificity"] = float(tn / (tn + fp)) if (tn + fp) else None
+                out["negative_precision"] = float(tn / (tn + fn)) if (tn + fn) else None
+        else:
+            out["balanced_accuracy"] = None
+            out["mcc"] = None
+            out["specificity"] = None
     return out
 
 

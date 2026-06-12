@@ -107,17 +107,44 @@ def resolve_class_weights(y: torch.Tensor, args: Any) -> dict[int, float]:
     return {0: float(w0), 1: float(w1)}
 
 
+def _weighted_bce_components(logits: torch.Tensor, y: torch.Tensor, class_weights: dict[int, float]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return unreduced BCE and per-row class weights."""
+    y = y.float()
+    w0 = float(class_weights.get(0, 1.0))
+    w1 = float(class_weights.get(1, 1.0))
+    weights = torch.where(y >= 0.5, torch.full_like(y, w1), torch.full_like(y, w0))
+    bce = F.binary_cross_entropy_with_logits(logits, y, reduction="none")
+    return bce, weights
+
+
+def _pairwise_bpr_loss(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Bayesian pairwise ranking loss for imbalanced link prediction.
+
+    This directly optimizes the ordering of positive pairs above negative pairs,
+    which is often more useful than plain BCE when ROC-AUC/MCC are weak but the
+    positive class dominates the dataset.
+    """
+    y = y.float()
+    pos_logits = logits[y >= 0.5].view(-1)
+    neg_logits = logits[y < 0.5].view(-1)
+    if pos_logits.numel() == 0 or neg_logits.numel() == 0:
+        return F.binary_cross_entropy_with_logits(logits, y)
+    k = min(pos_logits.numel(), neg_logits.numel())
+    if pos_logits.numel() > k:
+        pos_logits = pos_logits[torch.randint(0, pos_logits.numel(), (k,), device=pos_logits.device)]
+    if neg_logits.numel() > k:
+        neg_logits = neg_logits[torch.randint(0, neg_logits.numel(), (k,), device=neg_logits.device)]
+    return F.softplus(-(pos_logits - neg_logits)).mean()
+
+
 def weighted_or_focal_loss(logits: torch.Tensor, y: torch.Tensor, args: Any, class_weights: dict[int, float]) -> torch.Tensor:
     loss_name = str(getattr(args, "loss", "weighted_bce") or "weighted_bce").lower()
     y = y.float()
     if loss_name == "bce":
         return F.binary_cross_entropy_with_logits(logits, y)
 
-    w0 = float(class_weights.get(0, 1.0))
-    w1 = float(class_weights.get(1, 1.0))
-    weights = torch.where(y >= 0.5, torch.full_like(y, w1), torch.full_like(y, w0))
+    bce, weights = _weighted_bce_components(logits, y, class_weights)
 
-    bce = F.binary_cross_entropy_with_logits(logits, y, reduction="none")
     if loss_name == "weighted_bce":
         return (weights * bce).mean()
 
@@ -133,8 +160,17 @@ def weighted_or_focal_loss(logits: torch.Tensor, y: torch.Tensor, args: Any, cla
             alpha_t = torch.ones_like(y)
         return (weights * alpha_t * focal * bce).mean()
 
-    raise ValueError(f"Unsupported loss: {loss_name}. Use bce, weighted_bce, or focal.")
+    if loss_name in {"bpr", "pairwise_bpr"}:
+        return _pairwise_bpr_loss(logits, y)
 
+    if loss_name in {"weighted_bce_bpr", "bce_bpr"}:
+        bpr_weight = float(getattr(args, "bpr_weight", 0.5))
+        bpr_weight = max(0.0, min(1.0, bpr_weight))
+        wbce = (weights * bce).mean()
+        bpr = _pairwise_bpr_loss(logits, y)
+        return (1.0 - bpr_weight) * wbce + bpr_weight * bpr
+
+    raise ValueError(f"Unsupported loss: {loss_name}. Use bce, weighted_bce, focal, bpr, or weighted_bce_bpr.")
 
 def amp_autocast(device: torch.device | str, enabled: bool):
     use_amp = bool(enabled) and str(device).startswith("cuda")
@@ -176,6 +212,16 @@ def extended_binary_metrics(y_true, y_score, threshold: float = 0.5) -> dict[str
         out["roc_auc"] = None
     out["average_precision"] = float(average_precision_score(y_true, y_score)) if average_precision_score is not None else None
 
+    out["score_min"] = float(np.min(y_score)) if y_score.size else None
+    out["score_max"] = float(np.max(y_score)) if y_score.size else None
+    out["score_mean"] = float(np.mean(y_score)) if y_score.size else None
+    if len(np.unique(y_true)) == 2:
+        pos_scores = y_score[y_true == 1]
+        neg_scores = y_score[y_true == 0]
+        out["score_mean_positive"] = float(np.mean(pos_scores)) if pos_scores.size else None
+        out["score_mean_negative"] = float(np.mean(neg_scores)) if neg_scores.size else None
+        out["score_median_positive"] = float(np.median(pos_scores)) if pos_scores.size else None
+        out["score_median_negative"] = float(np.median(neg_scores)) if neg_scores.size else None
     y_pred = (y_score >= threshold).astype(int)
     out["threshold"] = float(threshold)
     if accuracy_score is not None:
@@ -184,6 +230,7 @@ def extended_binary_metrics(y_true, y_score, threshold: float = 0.5) -> dict[str
         out["precision"] = float(precision_score(y_true, y_pred, zero_division=0))
         out["recall"] = float(recall_score(y_true, y_pred, zero_division=0))
         out["balanced_accuracy"] = float(balanced_accuracy_score(y_true, y_pred)) if len(np.unique(y_true)) == 2 else None
+        out["youden_j"] = float(2.0 * out["balanced_accuracy"] - 1.0) if out.get("balanced_accuracy") is not None else None
         out["mcc"] = float(matthews_corrcoef(y_true, y_pred)) if len(np.unique(y_true)) == 2 else None
         if confusion_matrix is not None and len(np.unique(y_true)) == 2:
             tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
@@ -235,6 +282,7 @@ def metric_for_checkpoint(metrics: dict[str, Any], metric: str) -> float:
         "auc": "roc_auc",
         "auroc": "roc_auc",
         "bal_acc": "balanced_accuracy",
+        "youden": "youden_j",
     }
     metric = aliases.get(metric, metric)
     return _metric_value(metrics, metric)
