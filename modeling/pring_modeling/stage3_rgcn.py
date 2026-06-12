@@ -9,180 +9,343 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
 try:
+    from torch_geometric.loader import LinkNeighborLoader
     from torch_geometric.nn import RGCNConv
-except Exception as exc:  # pragma: no cover
-    raise SystemExit("PyTorch Geometric is required for Stage 3 R-GCN. Install torch-geometric matching your PyTorch build.") from exc
+except Exception:  # pragma: no cover
+    LinkNeighborLoader = None  # type: ignore
+    RGCNConv = None  # type: ignore
 
 from .common import binary_metrics, ensure_dir, get_device, save_json, set_seed
 from .neo4j_export import export_predictions_dataframe
 from .stage3_common import encode_pairs, load_candidate_pairs, load_heterodata, load_node_maps, load_pairs, resolve_stage3_dir
 
-
-def make_homogeneous_rgcn_graph(data, add_reverse_edges: bool = True) -> dict[str, Any]:
-    node_offsets: dict[str, int] = {}
-    node_counts: dict[str, int] = {}
-    cursor = 0
-    for node_type in data.node_types:
-        n = int(data[node_type].num_nodes)
-        node_offsets[node_type] = cursor
-        node_counts[node_type] = n
-        cursor += n
-    edge_indices: list[torch.Tensor] = []
-    edge_types: list[torch.Tensor] = []
-    relation_to_id: dict[str, int] = {}
-
-    def add_edges(src_type: str, dst_type: str, edge_index: torch.Tensor, rel_name: str) -> None:
-        if edge_index.numel() == 0:
-            return
-        rid = relation_to_id.setdefault(rel_name, len(relation_to_id))
-        src = edge_index[0].long() + node_offsets[src_type]
-        dst = edge_index[1].long() + node_offsets[dst_type]
-        edge_indices.append(torch.stack([src, dst], dim=0))
-        edge_types.append(torch.full((src.numel(),), rid, dtype=torch.long))
-
-    for edge_type in data.edge_types:
-        src_type, rel, dst_type = edge_type
-        edge_index = data[edge_type].edge_index.cpu()
-        rel_name = f"{src_type}__{rel}__{dst_type}"
-        add_edges(src_type, dst_type, edge_index, rel_name)
-        if add_reverse_edges:
-            add_edges(dst_type, src_type, edge_index.flip(0), f"{dst_type}__rev_{rel}__{src_type}")
-    if not edge_indices:
-        raise ValueError("The HeteroData object contains no edges.")
-    return {
-        "edge_index": torch.cat(edge_indices, dim=1),
-        "edge_type": torch.cat(edge_types, dim=0),
-        "num_nodes": cursor,
-        "num_relations": len(relation_to_id),
-        "relation_to_id": relation_to_id,
-        "node_offsets": node_offsets,
-        "node_counts": node_counts,
-    }
+TARGET_EDGE_TYPE = ("Compound", "stage3_supervision", "Protein")
 
 
-class RGCNLinkPredictor(nn.Module):
-    def __init__(self, num_nodes: int, num_relations: int, hidden_dim: int = 128, num_layers: int = 2, num_bases: int | None = 30, dropout: float = 0.2):
+def _parse_num_neighbors(value: str | int, num_layers: int) -> list[int]:
+    if isinstance(value, int):
+        return [value] * max(1, num_layers)
+    text = str(value).strip()
+    if not text:
+        return [10] * max(1, num_layers)
+    vals = [int(v.strip()) for v in text.split(",") if v.strip()]
+    if not vals:
+        vals = [10]
+    if len(vals) < num_layers:
+        vals.extend([vals[-1]] * (num_layers - len(vals)))
+    return vals[: max(1, num_layers)]
+
+
+def _node_counts(data) -> dict[str, int]:
+    return {nt: int(data[nt].num_nodes) for nt in data.node_types}
+
+
+def _feature_dims(data) -> dict[str, int]:
+    dims: dict[str, int] = {}
+    for nt in data.node_types:
+        x = getattr(data[nt], "x", None)
+        dims[nt] = int(x.size(-1)) if x is not None else 0
+    return dims
+
+
+def _safe_key(name: str) -> str:
+    return str(name).replace(".", "_").replace("-", "_").replace("/", "_").replace(" ", "_")
+
+
+def _ensure_supervision_edge_type(data):
+    # LinkNeighborLoader expects the edge type used in edge_label_index to exist.
+    if TARGET_EDGE_TYPE not in data.edge_types:
+        data[TARGET_EDGE_TYPE].edge_index = torch.empty((2, 0), dtype=torch.long)
+    return data
+
+
+def _relation_to_id(data) -> dict[tuple[str, str, str], int]:
+    return {tuple(et): i for i, et in enumerate(data.edge_types)}
+
+
+class SampledRGCNLinkPredictor(nn.Module):
+    """Mini-batch R-GCN for large PRING heterogeneous graphs.
+
+    This model avoids full-graph GPU encoding. Each training step receives a
+    LinkNeighborLoader sampled subgraph, creates hidden node states only for the
+    sampled nodes, converts that sampled heterogeneous subgraph to a homogeneous
+    relation graph, and scores the supervision Compound-Protein pairs in that
+    batch.
+    """
+
+    def __init__(
+        self,
+        metadata: tuple[list[str], list[tuple[str, str, str]]],
+        node_counts: dict[str, int],
+        feature_dims: dict[str, int],
+        relation_to_id: dict[tuple[str, str, str], int],
+        hidden_dim: int = 64,
+        num_layers: int = 1,
+        num_bases: int | None = 16,
+        dropout: float = 0.2,
+        featureless_mode: str = "type",
+    ):
         super().__init__()
+        self.node_types = list(metadata[0])
+        self.relation_to_id = relation_to_id
+        self.hidden_dim = hidden_dim
         self.dropout = dropout
-        self.embedding = nn.Embedding(num_nodes, hidden_dim)
-        nn.init.xavier_uniform_(self.embedding.weight)
+        self.featureless_mode = featureless_mode
+
+        self.input_proj = nn.ModuleDict()
+        self.type_embeddings = nn.ParameterDict()
+        self.global_embeddings = nn.ModuleDict()
+        for nt in self.node_types:
+            key = _safe_key(nt)
+            dim = int(feature_dims.get(nt, 0))
+            if dim > 0:
+                self.input_proj[key] = nn.Linear(dim, hidden_dim)
+            if featureless_mode == "global":
+                self.global_embeddings[key] = nn.Embedding(int(node_counts[nt]), hidden_dim)
+                nn.init.xavier_uniform_(self.global_embeddings[key].weight)
+            else:
+                self.type_embeddings[key] = nn.Parameter(torch.empty(hidden_dim))
+                nn.init.normal_(self.type_embeddings[key], mean=0.0, std=0.02)
+
+        num_relations = max(1, len(relation_to_id))
         bases = min(num_bases or num_relations, num_relations)
-        self.convs = nn.ModuleList([RGCNConv(hidden_dim, hidden_dim, num_relations, num_bases=bases) for _ in range(num_layers)])
+        self.convs = nn.ModuleList([
+            RGCNConv(hidden_dim, hidden_dim, num_relations=num_relations, num_bases=bases)
+            for _ in range(max(1, num_layers))
+        ])
         self.decoder = nn.Sequential(
-            nn.Linear(hidden_dim * 4, hidden_dim), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(hidden_dim, max(8, hidden_dim // 2)), nn.ReLU(), nn.Linear(max(8, hidden_dim // 2), 1),
+            nn.Linear(hidden_dim * 4, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, max(8, hidden_dim // 2)),
+            nn.ReLU(),
+            nn.Linear(max(8, hidden_dim // 2), 1),
         )
 
-    def encode(self, edge_index: torch.Tensor, edge_type: torch.Tensor) -> torch.Tensor:
-        x = self.embedding.weight
+    def _initial_node_features(self, node_type: str, store) -> torch.Tensor:
+        key = _safe_key(node_type)
+        x = getattr(store, "x", None)
+        n = int(store.num_nodes)
+        if x is not None and key in self.input_proj:
+            return self.input_proj[key](x.float())
+        if self.featureless_mode == "global" and key in self.global_embeddings:
+            if hasattr(store, "n_id"):
+                ids = store.n_id.long().to(next(self.parameters()).device)
+            else:
+                ids = torch.arange(n, device=next(self.parameters()).device)
+            return self.global_embeddings[key](ids)
+        emb = self.type_embeddings[key].view(1, -1)
+        return emb.expand(n, -1)
+
+    def _homogenize_batch(self, batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, int]]:
+        xs: list[torch.Tensor] = []
+        offsets: dict[str, int] = {}
+        cursor = 0
+        for nt in batch.node_types:
+            n = int(batch[nt].num_nodes)
+            offsets[nt] = cursor
+            xs.append(self._initial_node_features(nt, batch[nt]))
+            cursor += n
+        if not xs:
+            raise ValueError("Sampled batch contains no node types.")
+        x = torch.cat(xs, dim=0)
+
+        edge_indices: list[torch.Tensor] = []
+        edge_types: list[torch.Tensor] = []
+        device = x.device
+        for et in batch.edge_types:
+            et = tuple(et)
+            store = batch[et]
+            edge_index = getattr(store, "edge_index", None)
+            if edge_index is None or edge_index.numel() == 0:
+                continue
+            if et not in self.relation_to_id:
+                continue
+            src_t, _, dst_t = et
+            ei = edge_index.long().to(device)
+            src = ei[0] + offsets[src_t]
+            dst = ei[1] + offsets[dst_t]
+            edge_indices.append(torch.stack([src, dst], dim=0))
+            edge_types.append(torch.full((src.numel(),), self.relation_to_id[et], dtype=torch.long, device=device))
+        if edge_indices:
+            edge_index = torch.cat(edge_indices, dim=1)
+            edge_type = torch.cat(edge_types, dim=0)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=device)
+            edge_type = torch.empty((0,), dtype=torch.long, device=device)
+        return x, edge_index, edge_type, offsets
+
+    def encode_batch(self, batch) -> tuple[torch.Tensor, dict[str, int]]:
+        x, edge_index, edge_type, offsets = self._homogenize_batch(batch)
         for conv in self.convs:
             x = conv(x, edge_index, edge_type)
             x = F.dropout(F.relu(x), p=self.dropout, training=self.training)
-        return x
+        return x, offsets
 
-    def score_pairs(self, z: torch.Tensor, compound_global_idx: torch.Tensor, protein_global_idx: torch.Tensor) -> torch.Tensor:
-        c = z[compound_global_idx]
-        p = z[protein_global_idx]
+    def score_supervision_edges(self, z: torch.Tensor, offsets: dict[str, int], batch) -> torch.Tensor:
+        edge_label_index = batch[TARGET_EDGE_TYPE].edge_label_index.long().to(z.device)
+        c_idx = edge_label_index[0] + offsets["Compound"]
+        p_idx = edge_label_index[1] + offsets["Protein"]
+        c = z[c_idx]
+        p = z[p_idx]
         pair = torch.cat([c, p, torch.abs(c - p), c * p], dim=-1)
         return self.decoder(pair).squeeze(-1)
 
 
-def to_global_pair_indices(compound_local: torch.LongTensor, protein_local: torch.LongTensor, node_offsets: dict[str, int]):
-    return compound_local + int(node_offsets["Compound"]), protein_local + int(node_offsets["Protein"])
+def _make_loader(data, c_idx, p_idx, y, args, shuffle: bool):
+    if LinkNeighborLoader is None:
+        raise RuntimeError("PyTorch Geometric LinkNeighborLoader is required. Install torch-geometric with pyg-lib or torch-sparse support.")
+    edge_label_index = torch.stack([c_idx.long(), p_idx.long()], dim=0)
+    return LinkNeighborLoader(
+        data,
+        num_neighbors=_parse_num_neighbors(args.num_neighbors, args.num_layers),
+        edge_label_index=(TARGET_EDGE_TYPE, edge_label_index),
+        edge_label=y.float(),
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.num_workers,
+        pin_memory=bool(args.pin_memory),
+    )
 
 
-def run_epoch(model, graph, loader, optim, device):
+def _run_epoch(model, loader, optim, device, use_amp: bool = False) -> float:
     model.train()
     total = 0.0
-    edge_index = graph["edge_index"].to(device)
-    edge_type = graph["edge_type"].to(device)
-    for c, p, y in loader:
-        c, p, y = c.to(device), p.to(device), y.to(device)
-        optim.zero_grad()
-        z = model.encode(edge_index, edge_type)
-        logits = model.score_pairs(z, c, p)
-        loss = F.binary_cross_entropy_with_logits(logits, y)
-        loss.backward()
-        optim.step()
+    n_total = 0
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and str(device).startswith("cuda"))
+    for batch in loader:
+        batch = batch.to(device)
+        y = batch[TARGET_EDGE_TYPE].edge_label.float().to(device)
+        optim.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(enabled=use_amp and str(device).startswith("cuda")):
+            z, offsets = model.encode_batch(batch)
+            logits = model.score_supervision_edges(z, offsets, batch)
+            loss = F.binary_cross_entropy_with_logits(logits, y)
+        scaler.scale(loss).backward()
+        scaler.step(optim)
+        scaler.update()
         total += float(loss.item()) * y.numel()
-    return total / max(1, len(loader.dataset))
+        n_total += int(y.numel())
+    return total / max(1, n_total)
 
 
-def predict(model, graph, c_idx, p_idx, device, batch_size: int = 16384):
+def _predict(model, loader, device, use_amp: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     model.eval()
-    edge_index = graph["edge_index"].to(device)
-    edge_type = graph["edge_type"].to(device)
-    scores = []
+    scores: list[torch.Tensor] = []
+    labels: list[torch.Tensor] = []
     with torch.no_grad():
-        z = model.encode(edge_index, edge_type)
-        for start in range(0, len(c_idx), batch_size):
-            cb = c_idx[start:start + batch_size].to(device)
-            pb = p_idx[start:start + batch_size].to(device)
-            scores.append(torch.sigmoid(model.score_pairs(z, cb, pb)).cpu())
-    return torch.cat(scores).numpy()
+        for batch in loader:
+            batch = batch.to(device)
+            y = batch[TARGET_EDGE_TYPE].edge_label.float().cpu()
+            with torch.cuda.amp.autocast(enabled=use_amp and str(device).startswith("cuda")):
+                z, offsets = model.encode_batch(batch)
+                logits = model.score_supervision_edges(z, offsets, batch)
+                score = torch.sigmoid(logits).detach().cpu()
+            scores.append(score)
+            labels.append(y)
+    return torch.cat(scores), torch.cat(labels)
+
+
+def _score_rows(model, data, rows: pd.DataFrame, node_maps, args, device) -> tuple[pd.DataFrame, torch.Tensor]:
+    c, p, y, kept = encode_pairs(rows, node_maps)
+    loader = _make_loader(data, c, p, y, args, shuffle=False)
+    scores, _ = _predict(model, loader, device, args.amp)
+    return kept.reset_index(drop=True), scores
 
 
 def run(args: argparse.Namespace) -> dict:
+    if RGCNConv is None or LinkNeighborLoader is None:
+        raise RuntimeError("PyTorch Geometric with LinkNeighborLoader and RGCNConv is required for sampled Stage 3 R-GCN.")
     set_seed(args.seed)
     resolved = resolve_stage3_dir(args.modeling_dir)
     out_dir = ensure_dir(args.output_dir)
     try:
         stage_dir = resolved.root
         data = load_heterodata(stage_dir)
+        data = _ensure_supervision_edge_type(data)
         node_maps = load_node_maps(stage_dir)
         train_df, valid_df, test_df = load_pairs(stage_dir, args.seed)
-        c_tr_local, p_tr_local, y_tr, _ = encode_pairs(train_df, node_maps)
-        c_va_local, p_va_local, y_va, _ = encode_pairs(valid_df, node_maps)
-        c_te_local, p_te_local, y_te, test_kept = encode_pairs(test_df, node_maps)
-        graph = make_homogeneous_rgcn_graph(data, add_reverse_edges=not args.no_reverse_edges)
-        c_tr, p_tr = to_global_pair_indices(c_tr_local, p_tr_local, graph["node_offsets"])
-        c_va, p_va = to_global_pair_indices(c_va_local, p_va_local, graph["node_offsets"])
-        c_te, p_te = to_global_pair_indices(c_te_local, p_te_local, graph["node_offsets"])
+        c_tr, p_tr, y_tr, _ = encode_pairs(train_df, node_maps)
+        c_va, p_va, y_va, _ = encode_pairs(valid_df, node_maps)
+        c_te, p_te, y_te, test_kept = encode_pairs(test_df, node_maps)
+
+        train_loader = _make_loader(data, c_tr, p_tr, y_tr, args, shuffle=True)
+        valid_loader = _make_loader(data, c_va, p_va, y_va, args, shuffle=False)
+        test_loader = _make_loader(data, c_te, p_te, y_te, args, shuffle=False)
 
         device = get_device(args.device)
-        model = RGCNLinkPredictor(graph["num_nodes"], graph["num_relations"], args.hidden_dim, args.num_layers, args.num_bases, args.dropout).to(device)
-        optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-        loader = DataLoader(TensorDataset(c_tr, p_tr, y_tr), batch_size=args.batch_size, shuffle=True)
-        save_json({"node_offsets": graph["node_offsets"], "node_counts": graph["node_counts"], "relation_to_id": graph["relation_to_id"], "args": vars(args)}, out_dir / "rgcn_graph_metadata.json")
+        relation_to_id = _relation_to_id(data)
+        model = SampledRGCNLinkPredictor(
+            metadata=data.metadata(),
+            node_counts=_node_counts(data),
+            feature_dims=_feature_dims(data),
+            relation_to_id=relation_to_id,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            num_bases=args.num_bases,
+            dropout=args.dropout,
+            featureless_mode=args.featureless_mode,
+        ).to(device)
+        optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        save_json({
+            "mode": "sampled_link_neighbor_loader",
+            "target_edge_type": list(TARGET_EDGE_TYPE),
+            "node_counts": _node_counts(data),
+            "feature_dims": _feature_dims(data),
+            "relation_to_id": {"|".join(k): v for k, v in relation_to_id.items()},
+            "args": vars(args),
+        }, out_dir / "rgcn_sampled_metadata.json")
+
         best_ap = -1.0
         history = []
         for epoch in range(1, args.epochs + 1):
-            loss = run_epoch(model, graph, loader, optim, device)
-            val_score = predict(model, graph, c_va, p_va, device, args.score_batch_size)
-            val_metrics = binary_metrics(y_va.numpy(), val_score, threshold=args.threshold)
-            history.append({"epoch": epoch, "loss": loss, **{f"valid_{k}": v for k, v in val_metrics.items()}})
-            ap = val_metrics.get("average_precision") or -1.0
-            if float(ap) > best_ap:
-                best_ap = float(ap)
+            loss = _run_epoch(model, train_loader, optim, device, args.amp)
+            val_score, val_y = _predict(model, valid_loader, device, args.amp)
+            val_metrics = binary_metrics(val_y.numpy(), val_score.numpy(), threshold=args.threshold)
+            row = {"epoch": epoch, "loss": loss, **{f"valid_{k}": v for k, v in val_metrics.items()}}
+            history.append(row)
+            ap = float(val_metrics.get("average_precision") or -1.0)
+            if ap > best_ap:
+                best_ap = ap
                 torch.save({"model_state": model.state_dict(), "args": vars(args)}, out_dir / "best_model.pt")
             print(f"epoch={epoch:03d} loss={loss:.4f} valid={val_metrics}")
+
         ckpt = torch.load(out_dir / "best_model.pt", map_location=device)
         model.load_state_dict(ckpt["model_state"])
+        test_score, test_y = _predict(model, test_loader, device, args.amp)
+        metrics = binary_metrics(test_y.numpy(), test_score.numpy(), threshold=args.threshold)
 
-        # Score candidates when available, otherwise score held-out test pairs.
         cand_df = load_candidate_pairs(stage_dir)
         if cand_df is not None and args.score_candidates:
-            c_can_local, p_can_local, _, score_rows = encode_pairs(cand_df.head(args.max_candidate_pairs) if args.max_candidate_pairs > 0 else cand_df, node_maps)
-            c_score, p_score = to_global_pair_indices(c_can_local, p_can_local, graph["node_offsets"])
-            score = predict(model, graph, c_score, p_score, device, args.score_batch_size)
+            cand = cand_df.head(args.max_candidate_pairs) if args.max_candidate_pairs > 0 else cand_df
+            score_rows, score = _score_rows(model, data, cand, node_maps, args, device)
         else:
-            score_rows = test_kept.copy()
-            score = predict(model, graph, c_te, p_te, device, args.score_batch_size)
-        test_score = predict(model, graph, c_te, p_te, device, args.score_batch_size)
-        metrics = binary_metrics(y_te.numpy(), test_score, threshold=args.threshold)
+            score_rows = test_kept.copy().reset_index(drop=True)
+            score = test_score
+
         pd.DataFrame(history).to_csv(out_dir / "training_history.csv", index=False)
         preds = score_rows.copy().reset_index(drop=True)
-        preds["score"] = score
-        preds["predicted_label"] = (score >= args.threshold).astype(int)
-        preds["model"] = "stage3_rgcn"
-        preds["stage"] = "Stage 3 — R-GCN"
+        preds["score"] = score.numpy()
+        preds["predicted_label"] = (score.numpy() >= args.threshold).astype(int)
+        preds["model"] = "stage3_rgcn_sampled"
+        preds["stage"] = "Stage 3 — sampled R-GCN"
         preds.to_csv(out_dir / "predictions.csv", index=False)
-        summary = {"stage": "Stage 3 — R-GCN", "model": "stage3_rgcn", "metrics": metrics, **{k: v for k, v in metrics.items()}, "prediction_rows_written": int(len(preds)), "predictions_file": str(out_dir / "predictions.csv")}
+
+        summary = {
+            "stage": "Stage 3 — sampled R-GCN",
+            "model": "stage3_rgcn_sampled",
+            "status": "trained",
+            "metrics": metrics,
+            **{k: v for k, v in metrics.items()},
+            "prediction_rows_written": int(len(preds)),
+            "predictions_file": str(out_dir / "predictions.csv"),
+            "model_file": str(out_dir / "best_model.pt"),
+            "training_history_file": str(out_dir / "training_history.csv"),
+        }
         if args.export_neo4j:
-            summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage3_rgcn", max_rows=args.max_neo4j_predictions)
+            summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage3_rgcn_sampled", max_rows=args.max_neo4j_predictions)
         save_json(summary, out_dir / "metrics.json")
         return summary
     finally:
@@ -190,25 +353,32 @@ def run(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train R-GCN + MLP decoder for compound-CYP450 link prediction.")
+    parser = argparse.ArgumentParser(description="Train sampled R-GCN + MLP decoder for compound-CYP450 link prediction.")
     parser.add_argument("--modeling-dir", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=4096)
-    parser.add_argument("--score-batch-size", type=int, default=16384)
-    parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--num-layers", type=int, default=2)
-    parser.add_argument("--num-bases", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--score-batch-size", type=int, default=4096)  # kept for CLI compatibility
+    parser.add_argument("--hidden-dim", "--hidden-channels", dest="hidden_dim", type=int, default=32)
+    parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument("--num-bases", type=int, default=16)
+    parser.add_argument("--num-neighbors", default="10", help="Comma-separated neighbors per GNN layer, e.g. '10' or '10,5'.")
+    parser.add_argument("--featureless-mode", choices=["type", "global"], default="type", help="Use one type vector for featureless nodes or global node embeddings.")
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--no-reverse-edges", action="store_true")
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--pin-memory", action="store_true")
+    parser.add_argument("--amp", action="store_true", help="Use mixed precision on CUDA.")
     parser.add_argument("--score-candidates", action="store_true")
     parser.add_argument("--max-candidate-pairs", type=int, default=100000)
     parser.add_argument("--export-neo4j", action="store_true")
     parser.add_argument("--max-neo4j-predictions", type=int, default=25000)
+    # Compatibility with previous full-batch script. Ignored because this version is sampled by design.
+    parser.add_argument("--no-reverse-edges", action="store_true")
     return parser
 
 
