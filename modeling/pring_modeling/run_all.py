@@ -3,137 +3,393 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
-from loguru import logger
+from .logging_utils import get_logger
 
-from .common import ensure_dir, save_json
+logger = get_logger(__name__)
+
+from .common import ensure_dir, save_json, read_table
 from .compare import compare_metrics, visualize
+from .neo4j_export import export_predictions_file
 
 
-def _run_stage1(args, root: Path, export: bool) -> dict:
+def _metric_value(summary: dict[str, Any], primary_metric: str) -> float:
+    """Return a comparable score for model selection.
+
+    The preferred metric is average precision because the CYP450 interaction
+    task is imbalanced. If the requested metric is missing, fall back to common
+    binary metrics before returning -inf.
+    """
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    candidates = [primary_metric, "average_precision", "roc_auc", "f1", "accuracy"]
+    for key in candidates:
+        value = summary.get(key, metrics.get(key))
+        if value is None:
+            continue
+        try:
+            if value == value:  # not NaN
+                return float(value)
+        except Exception:
+            continue
+    return float("-inf")
+
+
+def _safe_name(text: str) -> str:
+    return str(text).strip().lower().replace(" ", "_").replace("/", "_").replace("-", "_")
+
+
+def _write_best(stage_key: str, summaries: list[dict[str, Any]], root: Path, primary_metric: str) -> dict[str, Any]:
+    stage_best_dir = ensure_dir(root / "best")
+    valid = [s for s in summaries if s.get("status") not in {"skipped_or_failed", "failed"}]
+    if not valid:
+        result = {"stage": stage_key, "status": "no_successful_models"}
+        save_json(result, stage_best_dir / f"{stage_key}_best.json")
+        return result
+    best = max(valid, key=lambda s: _metric_value(s, primary_metric))
+    best = dict(best)
+    best["selection_metric"] = primary_metric
+    best["selection_score"] = _metric_value(best, primary_metric)
+    pred_file = best.get("predictions_file")
+    if pred_file and Path(pred_file).exists():
+        dest = stage_best_dir / f"{stage_key}_best_predictions.csv"
+        shutil.copy2(pred_file, dest)
+        best["best_predictions_file"] = str(dest)
+    model_file = best.get("model_file")
+    if model_file and Path(model_file).exists():
+        dest_model = stage_best_dir / f"{stage_key}_best_model{Path(model_file).suffix}"
+        try:
+            shutil.copy2(model_file, dest_model)
+            best["best_model_file"] = str(dest_model)
+        except Exception as exc:
+            best["best_model_copy_warning"] = str(exc)
+    save_json(best, stage_best_dir / f"{stage_key}_best.json")
+    return best
+
+
+def _export_best_if_requested(best: dict[str, Any], export: bool, max_rows: int) -> dict[str, Any] | None:
+    if not export:
+        return None
+    pred_file = best.get("best_predictions_file") or best.get("predictions_file")
+    if not pred_file or not Path(pred_file).exists():
+        return {"exported": 0, "reason": "best prediction file missing"}
+    return export_predictions_file(pred_file, model_name=str(best.get("model") or "best_model"), max_rows=max_rows)
+
+
+def _run_stage1_model(args: argparse.Namespace, root: Path, classifier: str, export_individual: bool) -> dict[str, Any]:
     from .stage1_tabular import build_parser, run
+
+    out_dir = root / f"stage1_{_safe_name(classifier)}"
     argv = [
         "--modeling-dir", str(args.modeling_dir),
-        "--output-dir", str(root / "stage1_tabular"),
+        "--output-dir", str(out_dir),
         "--report-dir", str(args.report_dir),
         "--target-column", args.target_column,
         "--max-training-rows", str(args.max_training_rows),
         "--max-scoring-rows", str(args.max_scoring_rows),
         "--max-predictions-file-rows", str(args.max_predictions_file_rows),
+        "--prediction-scope", args.prediction_scope,
         "--threshold", str(args.threshold),
+        "--classifier", classifier,
         "--n-estimators", str(args.n_estimators),
         "--n-jobs", str(args.n_jobs),
+        "--min-samples-leaf", str(args.min_samples_leaf),
     ]
     if args.max_depth is not None:
         argv += ["--max-depth", str(args.max_depth)]
-    if export:
+    if export_individual:
         argv += ["--export-neo4j", "--max-neo4j-predictions", str(args.max_neo4j_predictions)]
     return run(build_parser().parse_args(argv))
 
 
-def _run_stage2(args, root: Path, export: bool) -> dict:
+def _run_stage2_model(args: argparse.Namespace, root: Path, model_name: str, export_individual: bool) -> dict[str, Any]:
     from .stage2_kge import build_parser, run
+
+    out_dir = root / f"stage2_{_safe_name(model_name)}"
     argv = [
         "--modeling-dir", str(args.modeling_dir),
-        "--output-dir", str(root / f"stage2_{args.kge_model}"),
-        "--model", args.kge_model,
+        "--output-dir", str(out_dir),
+        "--model", model_name,
         "--epochs", str(args.stage2_epochs),
         "--batch-size", str(args.batch_size),
+        "--score-batch-size", str(args.score_batch_size),
         "--dim", str(args.kge_dim),
+        "--margin", str(args.kge_margin),
+        "--lr", str(args.lr),
         "--max-graph-train-triples", str(args.max_graph_train_triples),
         "--max-candidate-triples", str(args.max_candidate_triples),
+        "--target-train-repeat", str(args.stage2_target_train_repeat),
+        "--loss", args.stage2_loss,
+        "--optimizer", args.stage2_optimizer,
+        "--negatives-per-positive", str(args.stage2_negatives_per_positive),
+        "--eval-negatives-per-positive", str(args.stage2_eval_negatives_per_positive),
+        "--eval-every", str(args.stage2_eval_every),
+        "--patience", str(args.stage2_patience),
+        "--checkpoint-metric", args.stage2_checkpoint_metric,
+        "--num-workers", str(args.num_workers),
+        "--device", args.device,
     ]
-    if export:
+    if args.stage2_sparse_embeddings:
+        argv += ["--sparse-embeddings"]
+    else:
+        argv += ["--no-sparse-embeddings"]
+    if args.stage2_score_candidates:
+        argv += ["--score-candidates"]
+    else:
+        argv += ["--no-score-candidates"]
+    if args.stage2_save_mappings:
+        argv += ["--save-mappings"]
+    else:
+        argv += ["--no-save-mappings"]
+    if args.stage2_attach_entity_refs:
+        argv += ["--attach-entity-refs"]
+    else:
+        argv += ["--no-attach-entity-refs"]
+    if export_individual:
         argv += ["--export-neo4j", "--max-neo4j-predictions", str(args.max_neo4j_predictions)]
     return run(build_parser().parse_args(argv))
 
 
-def _run_stage3(args, root: Path, export: bool) -> dict:
-    if args.stage3_model == "hgt":
+def _run_stage3_model(args: argparse.Namespace, root: Path, model_name: str, export_individual: bool) -> dict[str, Any]:
+    if model_name == "hgt":
         from .stage3_hgt import build_parser, run
-        out = root / "stage3_hgt"
     else:
         from .stage3_rgcn import build_parser, run
-        out = root / "stage3_rgcn"
+    out_dir = root / f"stage3_{_safe_name(model_name)}"
     argv = [
         "--modeling-dir", str(args.modeling_dir),
-        "--output-dir", str(out),
+        "--output-dir", str(out_dir),
         "--epochs", str(args.stage3_epochs),
         "--batch-size", str(args.batch_size),
+        "--score-batch-size", str(args.score_batch_size),
         "--hidden-dim", str(args.hidden_dim),
         "--num-layers", str(args.num_layers),
+        "--dropout", str(args.dropout),
+        "--lr", str(args.lr),
         "--threshold", str(args.threshold),
+        "--device", args.device,
     ]
+    if model_name == "hgt":
+        argv += ["--heads", str(args.hgt_heads)]
+    else:
+        argv += ["--num-bases", str(args.rgcn_num_bases)]
     if args.score_candidates:
         argv += ["--score-candidates", "--max-candidate-pairs", str(args.max_candidate_pairs)]
-    if export:
+    if export_individual:
         argv += ["--export-neo4j", "--max-neo4j-predictions", str(args.max_neo4j_predictions)]
     return run(build_parser().parse_args(argv))
 
 
-def run(args: argparse.Namespace) -> dict:
-    output_root = ensure_dir(args.output_dir)
-    report_dir = ensure_dir(args.report_dir)
-    export = bool(args.export_neo4j)
-    summaries: dict[str, dict] = {}
-    for stage in args.stages:
+def _run_explanations(args: argparse.Namespace, output_root: Path, best_by_stage: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    from .stage4_explain import build_parser, run
+
+    out_root = ensure_dir(Path(args.report_dir) / "stage4_explainability")
+    results: dict[str, Any] = {}
+    # Explain the best model from each successful stage. This gives stage-specific
+    # evidence reports and avoids relying only on one overall winner.
+    for stage_key, best in best_by_stage.items():
+        pred_file = best.get("best_predictions_file") or best.get("predictions_file")
+        if not pred_file or not Path(pred_file).exists():
+            results[stage_key] = {"status": "skipped", "reason": "no prediction file"}
+            continue
+        argv = [
+            "--predictions", str(pred_file),
+            "--neo4j-uri", args.neo4j_uri,
+            "--neo4j-user", args.neo4j_user,
+            "--neo4j-password", args.neo4j_password,
+            "--database", args.neo4j_database,
+            "--output-dir", str(out_root / stage_key),
+            "--limit", str(args.explain_limit),
+            "--model-output-dir", str(Path(pred_file).parent.parent if "best" in Path(pred_file).parts else Path(pred_file).parent),
+            "--stage-name", stage_key,
+        ]
         try:
-            if stage == "stage1":
-                summaries[stage] = _run_stage1(args, output_root, export)
-            elif stage == "stage2":
-                summaries[stage] = _run_stage2(args, output_root, export)
-            elif stage == "stage3":
-                summaries[stage] = _run_stage3(args, output_root, export)
-            else:
-                logger.warning("Unknown stage requested: {}", stage)
+            results[stage_key] = run(build_parser().parse_args(argv))
         except Exception as exc:
-            summaries[stage] = {"status": "skipped_or_failed", "error": str(exc)}
-            logger.warning("{} did not complete: {}", stage, exc)
+            results[stage_key] = {"status": "skipped_or_failed", "error": str(exc)}
             if not args.continue_on_error:
                 raise
+    save_json(results, out_root / "stage4_explainability_summary.json")
+    return results
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    output_root = ensure_dir(args.output_dir)
+    report_dir = ensure_dir(args.report_dir)
+    export_individual = args.export_neo4j and args.export_scope == "all"
+    export_best = args.export_neo4j and args.export_scope in {"best", "best_only", "all"}
+
+    summaries: dict[str, Any] = {
+        "config": {
+            "modeling_dir": str(args.modeling_dir),
+            "output_dir": str(output_root),
+            "report_dir": str(report_dir),
+            "stages": args.stages,
+            "export_scope": args.export_scope,
+            "primary_metric": args.primary_metric,
+        }
+    }
+    best_by_stage: dict[str, dict[str, Any]] = {}
+
+    if "stage1" in args.stages:
+        stage_summaries: list[dict[str, Any]] = []
+        for classifier in args.stage1_models:
+            try:
+                logger.info("Running Stage 1 classifier: {}", classifier)
+                stage_summaries.append(_run_stage1_model(args, output_root, classifier, export_individual))
+            except Exception as exc:
+                logger.warning("Stage 1 model {} failed: {}", classifier, exc)
+                stage_summaries.append({"stage": "Stage 1", "model": f"stage1_{classifier}", "status": "skipped_or_failed", "error": str(exc)})
+                if not args.continue_on_error:
+                    raise
+        summaries["stage1"] = stage_summaries
+        best = _write_best("stage1", stage_summaries, output_root, args.primary_metric)
+        if export_best and best.get("status") != "no_successful_models":
+            best["neo4j_export_best"] = _export_best_if_requested(best, True, args.max_neo4j_predictions)
+            save_json(best, output_root / "best" / "stage1_best.json")
+        best_by_stage["stage1"] = best
+
+    if "stage2" in args.stages:
+        stage_summaries = []
+        for model_name in args.stage2_models:
+            try:
+                logger.info("Running Stage 2 KGE model: {}", model_name)
+                stage_summaries.append(_run_stage2_model(args, output_root, model_name, export_individual))
+            except Exception as exc:
+                logger.warning("Stage 2 model {} failed: {}", model_name, exc)
+                stage_summaries.append({"stage": "Stage 2", "model": f"stage2_{model_name}", "status": "skipped_or_failed", "error": str(exc)})
+                if not args.continue_on_error:
+                    raise
+        summaries["stage2"] = stage_summaries
+        best = _write_best("stage2", stage_summaries, output_root, args.primary_metric)
+        if export_best and best.get("status") != "no_successful_models":
+            best["neo4j_export_best"] = _export_best_if_requested(best, True, args.max_neo4j_predictions)
+            save_json(best, output_root / "best" / "stage2_best.json")
+        best_by_stage["stage2"] = best
+
+    if "stage3" in args.stages:
+        stage_summaries = []
+        for model_name in args.stage3_models:
+            try:
+                logger.info("Running Stage 3 GNN model: {}", model_name)
+                stage_summaries.append(_run_stage3_model(args, output_root, model_name, export_individual))
+            except Exception as exc:
+                logger.warning("Stage 3 model {} failed: {}", model_name, exc)
+                stage_summaries.append({"stage": "Stage 3", "model": f"stage3_{model_name}", "status": "skipped_or_failed", "error": str(exc)})
+                if not args.continue_on_error:
+                    raise
+        summaries["stage3"] = stage_summaries
+        best = _write_best("stage3", stage_summaries, output_root, args.primary_metric)
+        if export_best and best.get("status") != "no_successful_models":
+            best["neo4j_export_best"] = _export_best_if_requested(best, True, args.max_neo4j_predictions)
+            save_json(best, output_root / "best" / "stage3_best.json")
+        best_by_stage["stage3"] = best
+
+    # Comparison and visualizations across every metrics.json under output_root.
     try:
         comparison_dir = ensure_dir(report_dir / "comparison")
         df = compare_metrics([], str(output_root), str(comparison_dir), args.primary_metric)
-        visualize(str(comparison_dir / "model_comparison.csv"), str(comparison_dir / "figures"))
-        summaries["comparison"] = {"status": "written", "comparison_csv": str(comparison_dir / "model_comparison.csv")}
+        figures = visualize(str(comparison_dir / "model_comparison.csv"), str(comparison_dir / "figures"))
+        summaries["comparison"] = {
+            "status": "written",
+            "comparison_csv": str(comparison_dir / "model_comparison.csv"),
+            "figures": [str(p) for p in figures],
+        }
+        # Overall best across all successful stages.
+        if len(df):
+            row = df.sort_values("rank").iloc[0].to_dict()
+            summaries["overall_best"] = row
+            save_json(row, output_root / "best" / "overall_best.json")
     except Exception as exc:
         summaries["comparison"] = {"status": "skipped_or_failed", "error": str(exc)}
+        if not args.continue_on_error:
+            raise
+
+    if "stage4" in args.stages or args.run_stage4:
+        summaries["stage4"] = _run_explanations(args, output_root, best_by_stage)
+
+    save_json(best_by_stage, output_root / "best" / "best_by_stage.json")
     save_json(summaries, output_root / "run_all_summary.json")
     return summaries
 
 
+def _split_env(name: str, default: str) -> list[str]:
+    return [x for x in os.getenv(name, default).replace(",", " ").split() if x]
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Run integrated PRING CYP450 modeling stages inside the modeling Docker image.")
-    p.add_argument("--modeling-dir", default=os.getenv("PRING_RUN_DIR", "/runs/current"), help="PRING run, graph/ml/modeling folder, standalone stage folder, or zip.")
+    p = argparse.ArgumentParser(description="Run, compare, explain, and optionally export all PRING CYP450 modeling stages.")
+    p.add_argument("--modeling-dir", default=os.getenv("PRING_RUN_DIR", "/runs/current"), help="Full PRING run, graph/ml/modeling folder, standalone stage folder, or zip.")
     p.add_argument("--output-dir", default=os.getenv("MODEL_OUTPUT_DIR", "/models"))
     p.add_argument("--report-dir", default=os.getenv("MODEL_REPORT_DIR", "/reports/modeling"))
-    p.add_argument("--stages", nargs="+", default=os.getenv("MODEL_STAGES", "stage1 stage2").split(), choices=["stage1", "stage2", "stage3"])
+    p.add_argument("--stages", nargs="+", default=_split_env("MODEL_STAGES", "stage1 stage2 stage3 stage4"), choices=["stage1", "stage2", "stage3", "stage4"])
+    p.add_argument("--primary-metric", default=os.getenv("MODEL_PRIMARY_METRIC", "average_precision"))
+    p.add_argument("--continue-on-error", action="store_true", default=os.getenv("MODEL_CONTINUE_ON_ERROR", "true").lower() == "true")
+
+    # Stage 1
+    p.add_argument("--stage1-models", nargs="+", default=_split_env("MODEL_STAGE1_MODELS", "random_forest extra_trees"), choices=["random_forest", "extra_trees", "hist_gradient_boosting", "logistic_regression"])
     p.add_argument("--target-column", default=os.getenv("MODEL_TARGET_COLUMN", "label"))
     p.add_argument("--threshold", type=float, default=float(os.getenv("MODEL_THRESHOLD", "0.5")))
-    p.add_argument("--max-training-rows", type=int, default=int(os.getenv("MODEL_MAX_TRAINING_ROWS", "100000")))
-    p.add_argument("--max-scoring-rows", type=int, default=int(os.getenv("MODEL_MAX_SCORING_ROWS", "100000")))
-    p.add_argument("--max-predictions-file-rows", type=int, default=int(os.getenv("MODEL_MAX_PREDICTIONS_FILE_ROWS", "100000")))
-    p.add_argument("--n-estimators", type=int, default=int(os.getenv("MODEL_N_ESTIMATORS", "200")))
+    p.add_argument("--max-training-rows", type=int, default=int(os.getenv("MODEL_MAX_TRAINING_ROWS", "0")))
+    p.add_argument("--max-scoring-rows", type=int, default=int(os.getenv("MODEL_MAX_SCORING_ROWS", "0")))
+    p.add_argument("--max-predictions-file-rows", type=int, default=int(os.getenv("MODEL_MAX_PREDICTIONS_FILE_ROWS", "0")))
+    p.add_argument("--prediction-scope", default=os.getenv("MODEL_PREDICTION_SCOPE", "candidates"), choices=["supervised", "candidates"])
+    p.add_argument("--n-estimators", type=int, default=int(os.getenv("MODEL_N_ESTIMATORS", "300")))
     p.add_argument("--n-jobs", type=int, default=int(os.getenv("MODEL_N_JOBS", "1")))
+    p.add_argument("--min-samples-leaf", type=int, default=int(os.getenv("MODEL_MIN_SAMPLES_LEAF", "2")))
     p.add_argument("--max-depth", type=int, default=int(os.getenv("MODEL_MAX_DEPTH")) if os.getenv("MODEL_MAX_DEPTH") else None)
-    p.add_argument("--kge-model", choices=["distmult", "complex", "rotate"], default=os.getenv("MODEL_KGE_MODEL", "rotate"))
-    p.add_argument("--stage2-epochs", type=int, default=int(os.getenv("MODEL_STAGE2_EPOCHS", "20")))
-    p.add_argument("--kge-dim", type=int, default=int(os.getenv("MODEL_KGE_DIM", "64")))
-    p.add_argument("--max-graph-train-triples", type=int, default=int(os.getenv("MODEL_MAX_GRAPH_TRAIN_TRIPLES", "500000")))
+
+    # Stage 2
+    p.add_argument("--stage2-models", nargs="+", default=_split_env("MODEL_STAGE2_MODELS", "distmult complex rotate"), choices=["distmult", "complex", "rotate"])
+    p.add_argument("--stage2-epochs", type=int, default=int(os.getenv("MODEL_STAGE2_EPOCHS", "30")))
+    p.add_argument("--kge-dim", type=int, default=int(os.getenv("MODEL_KGE_DIM", "128")))
+    p.add_argument("--kge-margin", type=float, default=float(os.getenv("MODEL_KGE_MARGIN", "6.0")))
+    p.add_argument("--max-graph-train-triples", type=int, default=int(os.getenv("MODEL_MAX_GRAPH_TRAIN_TRIPLES", "0")))
     p.add_argument("--max-candidate-triples", type=int, default=int(os.getenv("MODEL_MAX_CANDIDATE_TRIPLES", "100000")))
-    p.add_argument("--stage3-model", choices=["rgcn", "hgt"], default=os.getenv("MODEL_STAGE3_MODEL", "rgcn"))
+    p.add_argument("--stage2-target-train-repeat", type=int, default=int(os.getenv("MODEL_STAGE2_TARGET_TRAIN_REPEAT", "5")))
+    p.add_argument("--stage2-loss", default=os.getenv("MODEL_STAGE2_LOSS", "softplus"), choices=["softplus", "bce", "margin"])
+    p.add_argument("--stage2-optimizer", default=os.getenv("MODEL_STAGE2_OPTIMIZER", "auto"), choices=["auto", "sparse_adam", "adam", "adamw"])
+    p.add_argument("--stage2-negatives-per-positive", type=int, default=int(os.getenv("MODEL_STAGE2_NEGATIVES_PER_POSITIVE", "1")))
+    p.add_argument("--stage2-eval-negatives-per-positive", type=int, default=int(os.getenv("MODEL_STAGE2_EVAL_NEGATIVES_PER_POSITIVE", "1")))
+    p.add_argument("--stage2-eval-every", type=int, default=int(os.getenv("MODEL_STAGE2_EVAL_EVERY", "1")))
+    p.add_argument("--stage2-patience", type=int, default=int(os.getenv("MODEL_STAGE2_PATIENCE", "5")))
+    p.add_argument("--stage2-checkpoint-metric", default=os.getenv("MODEL_STAGE2_CHECKPOINT_METRIC", "average_precision"), choices=["average_precision", "roc_auc", "f1", "accuracy", "balanced_accuracy", "mcc"])
+    p.add_argument("--stage2-sparse-embeddings", action="store_true", default=os.getenv("MODEL_STAGE2_SPARSE_EMBEDDINGS", "true").lower() == "true")
+    p.add_argument("--stage2-score-candidates", action="store_true", default=os.getenv("MODEL_STAGE2_SCORE_CANDIDATES", os.getenv("MODEL_SCORE_CANDIDATES", "false")).lower() == "true")
+    p.add_argument("--stage2-save-mappings", action="store_true", default=os.getenv("MODEL_STAGE2_SAVE_MAPPINGS", "false").lower() == "true")
+    p.add_argument("--stage2-attach-entity-refs", action="store_true", default=os.getenv("MODEL_STAGE2_ATTACH_ENTITY_REFS", "false").lower() == "true")
+
+    # Stage 3
+    p.add_argument("--stage3-models", nargs="+", default=_split_env("MODEL_STAGE3_MODELS", "rgcn hgt"), choices=["rgcn", "hgt"])
     p.add_argument("--stage3-epochs", type=int, default=int(os.getenv("MODEL_STAGE3_EPOCHS", "50")))
     p.add_argument("--hidden-dim", type=int, default=int(os.getenv("MODEL_HIDDEN_DIM", "128")))
     p.add_argument("--num-layers", type=int, default=int(os.getenv("MODEL_NUM_LAYERS", "2")))
+    p.add_argument("--dropout", type=float, default=float(os.getenv("MODEL_DROPOUT", "0.2")))
+    p.add_argument("--rgcn-num-bases", type=int, default=int(os.getenv("MODEL_RGCN_NUM_BASES", "30")))
+    p.add_argument("--hgt-heads", type=int, default=int(os.getenv("MODEL_HGT_HEADS", "2")))
+    p.add_argument("--score-candidates", action="store_true", default=os.getenv("MODEL_SCORE_CANDIDATES", "true").lower() == "true")
+    p.add_argument("--max-candidate-pairs", type=int, default=int(os.getenv("MODEL_MAX_CANDIDATE_PAIRS", "0")))
+
+    # Shared torch
     p.add_argument("--batch-size", type=int, default=int(os.getenv("MODEL_BATCH_SIZE", "4096")))
-    p.add_argument("--score-candidates", action="store_true", default=os.getenv("MODEL_SCORE_CANDIDATES", "false").lower() == "true")
-    p.add_argument("--max-candidate-pairs", type=int, default=int(os.getenv("MODEL_MAX_CANDIDATE_PAIRS", "100000")))
-    p.add_argument("--export-neo4j", action="store_true", default=os.getenv("MODEL_EXPORT_TO_NEO4J", "true").lower() == "true")
+    p.add_argument("--score-batch-size", type=int, default=int(os.getenv("MODEL_SCORE_BATCH_SIZE", "262144")))
+    p.add_argument("--num-workers", type=int, default=int(os.getenv("MODEL_NUM_WORKERS", "0")))
+    p.add_argument("--lr", type=float, default=float(os.getenv("MODEL_LR", "0.001")))
+    p.add_argument("--device", default=os.getenv("MODEL_DEVICE", "cuda" if os.getenv("CUDA_VISIBLE_DEVICES") else "cpu"))
+
+    # Export and explanation
+    p.add_argument("--export-neo4j", dest="export_neo4j", action="store_true", default=os.getenv("MODEL_EXPORT_TO_NEO4J", "true").lower() == "true")
+    p.add_argument("--no-export-neo4j", dest="export_neo4j", action="store_false")
+    p.add_argument("--export-scope", default=os.getenv("MODEL_EXPORT_SCOPE", "best_only"), choices=["none", "best", "best_only", "all"])
     p.add_argument("--max-neo4j-predictions", type=int, default=int(os.getenv("MODEL_MAX_NEO4J_PREDICTIONS", "25000")))
-    p.add_argument("--primary-metric", default=os.getenv("MODEL_PRIMARY_METRIC", "average_precision"))
-    p.add_argument("--continue-on-error", action="store_true", default=os.getenv("MODEL_CONTINUE_ON_ERROR", "true").lower() == "true")
+    p.add_argument("--run-stage4", action="store_true", default=os.getenv("MODEL_RUN_STAGE4", "true").lower() == "true")
+    p.add_argument("--explain-limit", type=int, default=int(os.getenv("MODEL_EXPLAIN_LIMIT", "100")))
+    p.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://neo4j:7687"))
+    p.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
+    p.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", "cyp450kg"))
+    p.add_argument("--neo4j-database", default=os.getenv("NEO4J_DATABASE", "neo4j"))
     return p
 
 
