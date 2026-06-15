@@ -1,5 +1,13 @@
 FROM neo4j:5.26-community
 
+# Install Neo4j Graph Data Science (GDS) at container startup via the official
+# Neo4j Docker plugin mechanism. This is required for CALL gds.* procedures
+# used by Stage 1 GDS/FastRP/GraphSAGE feature export.
+# If docker-compose supplies NEO4J_PLUGINS, it will override this value; make
+# sure it still includes "graph-data-science".
+ENV NEO4J_PLUGINS='["graph-data-science"]'
+
+
 # The Neo4j service only runs the database. PRING loading is done by the
 # separate pring-loader service so the database image stays clean and stable.
 #
