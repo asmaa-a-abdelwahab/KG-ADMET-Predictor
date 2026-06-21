@@ -1,1 +1,1 @@
-implementations/improved_v2/node_embeddings.py
+implementations/improved/node_embeddings.py

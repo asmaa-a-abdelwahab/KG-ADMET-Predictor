@@ -4,25 +4,6 @@ set -euo pipefail
 SCRIPT_NAME="$(basename "$1")"
 shift || true
 
-# When a wrapper is submitted via sbatch, SLURM may rename the copied script to
-# "slurm_script". Top-level wrappers should pass a hard-coded script name, but
-# keep this fallback to make old wrappers easier to diagnose.
-if [ "$SCRIPT_NAME" = "slurm_script" ]; then
-  case "${SLURM_JOB_NAME:-}" in
-    all_models_compare) SCRIPT_NAME="run_all_models_compare_hpc.sh" ;;
-    stage2_fast) SCRIPT_NAME="run_stage2_fast_no_neo4j.sh" ;;
-    stage3_sampled_gpu) SCRIPT_NAME="run_stage3_sampled_gpu_no_neo4j.sh" ;;
-    stage3_no_neo4j) SCRIPT_NAME="run_stage3_no_neo4j.sh" ;;
-    stage3_gpu_array) SCRIPT_NAME="run_stage3_gpu_array_no_neo4j.sh" ;;
-    final_validation) SCRIPT_NAME="run_final_validation_hpc.sh" ;;
-    *)
-      echo "ERROR: SLURM renamed the submitted script to slurm_script and the original wrapper name is unknown." >&2
-      echo "Set SELECTED_SCRIPT_NAME to one of the modeling/scripts/run_*.sh wrapper names or update the top-level wrapper." >&2
-      exit 2
-      ;;
-  esac
-fi
-
 PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/KG-ADMET-Predictor}"
 MODEL_ROOT="${MODEL_ROOT:-$PROJECT_DIR/modeling}"
 IMPL="${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}"
@@ -30,9 +11,8 @@ IMPL="${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}"
 case "$IMPL" in
   legacy|old) IMPL="legacy" ;;
   improved|new) IMPL="improved" ;;
-  improved_v2|final|finalized|v2) IMPL="improved_v2" ;;
   *)
-    echo "ERROR: Unknown MODEL_IMPL='$IMPL'. Use MODEL_IMPL=legacy, MODEL_IMPL=improved, or MODEL_IMPL=improved_v2." >&2
+    echo "ERROR: Unknown MODEL_IMPL='$IMPL'. Use MODEL_IMPL=legacy or MODEL_IMPL=improved." >&2
     exit 2
     ;;
 esac
@@ -43,7 +23,6 @@ if [ ! -d "$IMPL_DIR" ]; then
   echo "Expected one of:" >&2
   echo "  $MODEL_ROOT/implementations/legacy" >&2
   echo "  $MODEL_ROOT/implementations/improved" >&2
-  echo "  $MODEL_ROOT/implementations/improved_v2" >&2
   exit 2
 fi
 

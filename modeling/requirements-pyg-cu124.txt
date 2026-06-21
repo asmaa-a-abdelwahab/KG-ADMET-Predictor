@@ -1,1 +1,1 @@
-implementations/improved_v2/requirements-pyg-cu124.txt
+implementations/improved/requirements-pyg-cu124.txt
