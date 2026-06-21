@@ -37,6 +37,22 @@ printf 'Report parent: %s\n' "$REPORT_PARENT"
 printf 'Implementations: %s\n' "$IMPLEMENTATIONS"
 printf '============================================================\n'
 
+# Resolve device once so all implementations receive the same valid PyTorch device.
+# Older legacy modules cannot parse --device auto directly.
+MODEL_DEVICE="${MODEL_DEVICE:-auto}"
+if [ "$MODEL_DEVICE" = "auto" ] || [ -z "$MODEL_DEVICE" ]; then
+  MODEL_DEVICE="$(python - <<'PYDEVICE'
+try:
+    import torch
+    print('cuda' if torch.cuda.is_available() else 'cpu')
+except Exception:
+    print('cpu')
+PYDEVICE
+)"
+fi
+export MODEL_DEVICE
+printf 'Resolved model device: %s\n' "$MODEL_DEVICE"
+
 # Use improved_v2 for shared split preparation because it contains the newest neutral helper.
 bash "$MODEL_ROOT/scripts/use_implementation.sh" improved_v2
 export MODELING_PACKAGE_DIR="$MODEL_ROOT"

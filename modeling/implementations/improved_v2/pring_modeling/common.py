@@ -220,11 +220,18 @@ def optimize_binary_threshold(
 
 
 def get_device(device: str | None = None):
+    """Return a valid torch.device.
+
+    Accepts ``None``/empty/``auto`` and resolves them to CUDA when available,
+    otherwise CPU. This keeps SLURM wrapper defaults compatible with legacy and
+    improved implementations that previously passed ``--device auto`` directly
+    to torch.device().
+    """
     if torch is None:
         raise RuntimeError("PyTorch is not installed in this environment.")
-    if device:
-        return torch.device(device)
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device is None or str(device).strip() == "" or str(device).strip().lower() == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(str(device).strip())
 
 
 def tensor_from_embedding_value(value: Any) -> list[float]:

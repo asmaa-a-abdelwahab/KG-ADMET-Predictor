@@ -75,27 +75,78 @@ def _is_structural_like(col: str) -> bool:
 
 
 def find_training_file(stage_dir: Path) -> Path:
-    for name in [
+    """Return the Stage 1 supervised pair file, preferring exported GDS features."""
+    preferred = [
+        "compound_target_training_pairs_gds_features.csv",
+        "compound_target_training_pairs_graphsage_features.csv",
+        "compound_target_training_pairs_fastrp_features.csv",
+        "compound_target_training_pairs_structural_features.csv",
+        "compound_target_training_pairs_features.csv",
         "compound_target_training_pairs_for_gds.csv",
         "compound_target_training_pairs.csv",
         "positive_negative_compound_target_pairs.csv",
-    ]:
+    ]
+    for name in preferred:
         p = stage_dir / name
         if p.exists():
             return p
-    candidates = sorted(stage_dir.glob("*training*pair*.csv")) + sorted(stage_dir.glob("*pair*.csv"))
-    if not candidates:
+    patterns = [
+        "*training*pair*gds*feature*.csv",
+        "*training*pair*graphsage*feature*.csv",
+        "*training*pair*fastrp*feature*.csv",
+        "*training*pair*structural*feature*.csv",
+        "*training*pair*feature*.csv",
+        "*training*pair*.csv",
+        "*pair*.csv",
+    ]
+    candidates = []
+    for pattern in patterns:
+        candidates.extend(sorted(stage_dir.glob(pattern)))
+    seen = set()
+    unique = []
+    for p in candidates:
+        if p not in seen:
+            unique.append(p)
+            seen.add(p)
+    if not unique:
         raise FileNotFoundError(f"No Stage 1 training pair CSV found under {stage_dir}")
-    return candidates[0]
+    return unique[0]
 
 
 def find_candidate_file(stage_dir: Path) -> Path | None:
-    for name in ["candidate_pairs_for_gds_scoring.csv", "candidate_pairs.csv", "compound_target_candidate_pairs.csv"]:
+    """Return Stage 1 candidate file, preferring exported GDS features."""
+    preferred = [
+        "candidate_pairs_gds_features.csv",
+        "candidate_pairs_graphsage_features.csv",
+        "candidate_pairs_fastrp_features.csv",
+        "candidate_pairs_structural_features.csv",
+        "candidate_pairs_features.csv",
+        "candidate_pairs_for_gds_scoring.csv",
+        "candidate_pairs.csv",
+        "compound_target_candidate_pairs.csv",
+    ]
+    for name in preferred:
         p = stage_dir / name
         if p.exists():
             return p
-    hits = sorted(stage_dir.glob("*candidate*pair*.csv"))
-    return hits[0] if hits else None
+    patterns = [
+        "*candidate*pair*gds*feature*.csv",
+        "*candidate*pair*graphsage*feature*.csv",
+        "*candidate*pair*fastrp*feature*.csv",
+        "*candidate*pair*structural*feature*.csv",
+        "*candidate*pair*feature*.csv",
+        "*candidate*pair*.csv",
+    ]
+    hits = []
+    for pattern in patterns:
+        hits.extend(sorted(stage_dir.glob(pattern)))
+    seen = set()
+    unique = []
+    for p in hits:
+        if p not in seen:
+            unique.append(p)
+            seen.add(p)
+    return unique[0] if unique else None
 
 
 def _sample_by_label(df: pd.DataFrame, label_col: str, max_rows: int, seed: int) -> pd.DataFrame:

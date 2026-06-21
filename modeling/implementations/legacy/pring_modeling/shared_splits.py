@@ -21,9 +21,9 @@ from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 def _read_csv(path: Path, nrows: int | None = None) -> pd.DataFrame:
     try:
-        return pd.read_csv(path, nrows=nrows)
+        return pd.read_csv(path, nrows=nrows, low_memory=False)
     except UnicodeDecodeError:
-        return pd.read_csv(path, nrows=nrows, encoding="latin1")
+        return pd.read_csv(path, nrows=nrows, encoding="latin1", low_memory=False)
 
 
 def _first_existing(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
