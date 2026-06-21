@@ -1,4 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
+
 set -euo pipefail
 SCRIPT_NAME="run_modeling.sh"
 if [ -n "${MODEL_ROOT:-}" ] && [ -f "$MODEL_ROOT/scripts/_run_selected_implementation.sh" ]; then

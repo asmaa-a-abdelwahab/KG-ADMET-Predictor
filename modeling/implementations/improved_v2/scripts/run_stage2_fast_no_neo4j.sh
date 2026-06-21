@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=stage2_fast
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=250G
@@ -6,6 +6,10 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage2_fast_%j.out
 #SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage2_fast_%j.err
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 

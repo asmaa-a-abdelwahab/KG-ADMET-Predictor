@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=stage3_sampled_gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -8,6 +8,10 @@
 #SBATCH --time=12:00:00
 #SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_gpu_%j.out
 #SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_gpu_%j.err
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 SCRIPT_NAME="run_stage3_sampled_gpu_no_neo4j.sh"

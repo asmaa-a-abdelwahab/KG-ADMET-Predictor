@@ -1,10 +1,14 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=all_models_compare
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:1
 #SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/all_models_compare_%j.out
 #SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/all_models_compare_%j.err
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 SCRIPT_NAME="run_all_models_compare_hpc.sh"

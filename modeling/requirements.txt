@@ -1,1 +1,24 @@
-implementations/improved_v2/requirements.txt
+pandas>=2.1
+numpy>=1.24
+scikit-learn>=1.3
+joblib>=1.3
+neo4j>=5.20
+loguru>=0.7
+matplotlib>=3.7
+tabulate>=0.9
+pyarrow>=14.0
+tqdm>=4.66
+jinja2>=3.1
+# CPU/GPU wheels are resolved by pip from the build environment.
+# For GPU clusters, install the torch/PyG wheels matching CUDA before this file.
+torch>=2.2
+torch-geometric>=2.6
+# Required by PyG LinkNeighborLoader/NeighborSampler used in sampled Stage 3 R-GCN/HGT.
+# These may need CUDA/PyTorch-specific wheels from https://data.pyg.org.
+pyg_lib
+torch_sparse
+graphdatascience>=1.10
+captum>=0.7
+shap>=0.45
+notebook>=7.0
+ipykernel>=6.0

@@ -288,6 +288,22 @@ def _read_candidate_rows(candidate_file: Path, max_rows: int) -> pd.DataFrame:
 
 
 def _split_indices(df: pd.DataFrame, y: pd.Series, args: argparse.Namespace):
+    """Return train/test indices, honoring a supplied shared split column first.
+
+    Shared-split comparisons materialize `split`/`split_group`/`stage_use` into
+    the Stage 1 pair file before any implementation is run. Stage 1 only needs a
+    train/test split, so validation rows are intentionally included with train.
+    """
+    split_col = next((c for c in ["split", "data_split", "set", "partition", "stage_use"] if c in df.columns), None)
+    if split_col:
+        split = df[split_col].astype(str).str.lower().str.strip()
+        train_mask = split.isin(["train", "training", "valid", "validation", "val", "dev"])
+        test_mask = split.isin(["test", "holdout", "heldout", "held_out"])
+        train_idx = np.flatnonzero(train_mask.to_numpy())
+        test_idx = np.flatnonzero(test_mask.to_numpy())
+        if len(train_idx) > 0 and len(test_idx) > 0:
+            return train_idx, test_idx
+
     if args.group_split and args.group_column in df.columns and df[args.group_column].nunique() > 1:
         groups = df[args.group_column].astype(str)
         gss = GroupShuffleSplit(n_splits=1, test_size=args.test_size, random_state=args.seed)

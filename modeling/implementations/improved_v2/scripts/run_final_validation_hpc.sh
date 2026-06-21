@@ -1,9 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=final_validation
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=120G
 #SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/final_validation_%j.out
 #SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/final_validation_%j.err
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/KG-ADMET-Predictor}"

@@ -94,3 +94,41 @@ This creates:
 reports/hpo_plan_improved_v2/hpo_plan.csv
 reports/hpo_plan_improved_v2/submit_hpo.sh
 ```
+
+## Same-split comparison across legacy, improved and improved_v2
+
+For a reliable comparison, generate one canonical split manifest and run all three implementations against the same materialized modeling directory:
+
+```bash
+cd /home/asmaaali/KG-ADMET-Predictor
+
+PROJECT_DIR=/home/asmaaali/KG-ADMET-Predictor \
+MODEL_ROOT=/home/asmaaali/KG-ADMET-Predictor/modeling \
+MODEL_IMPLS="legacy improved improved_v2" \
+MODEL_SHARED_SPLIT_STRATEGY=compound \
+MODEL_SHARED_SPLIT_SEED=42 \
+MODEL_SHARED_TEST_SIZE=0.15 \
+MODEL_SHARED_VALID_SIZE=0.15 \
+MODEL_STAGE2_MODELS="complex distmult rotate" \
+RUN_STAGE1=true \
+RUN_STAGE2=true \
+RUN_STAGE3_RGCN=true \
+RUN_STAGE3_HGT=true \
+RUN_ENSEMBLE=true \
+RUN_FINAL_VALIDATION=true \
+RUN_COMPARE=true \
+MODEL_PRIMARY_COMPARE_METRIC=mcc \
+sbatch --export=ALL modeling/scripts/run_all_implementations_same_splits_hpc.sh
+```
+
+The command creates:
+
+- `shared_splits/<run_id>/split_manifest.csv`
+- `shared_splits/<run_id>/split_summary.json`
+- `shared_splits/<run_id>/modeling_prepared/` with the same `split`, `split_group` and `stage_use` columns materialized into all supervised pair CSVs
+- `models_all_stages_same_splits/<run_id>/legacy/`
+- `models_all_stages_same_splits/<run_id>/improved/`
+- `models_all_stages_same_splits/<run_id>/improved_v2/`
+- `reports/all_stages_same_splits/<run_id>/cross_implementation/cross_implementation_comparison.md`
+
+Stage 1 was updated in all implementations to honor an existing `split` column before falling back to its own random/group split. Stage 2 and Stage 3 already use explicit split columns when present. This makes the comparison across implementations use the same train/validation/test assignments.

@@ -1,4 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$1")"

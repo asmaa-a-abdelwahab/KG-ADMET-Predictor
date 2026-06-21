@@ -1,10 +1,14 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=stage3_sampled
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:1
 #SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_%j.out
 #SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_%j.err
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
