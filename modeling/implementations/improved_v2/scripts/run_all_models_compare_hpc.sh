@@ -93,6 +93,11 @@ PYDEVICE
 )"
 fi
 
+# Per-stage device overrides. This keeps Stage 3 on GPU while allowing memory-heavy Stage 2 KGE to run on CPU.
+STAGE1_DEVICE="${MODEL_STAGE1_DEVICE:-$DEVICE}"
+STAGE2_DEVICE="${MODEL_STAGE2_DEVICE:-$DEVICE}"
+STAGE3_DEVICE="${MODEL_STAGE3_DEVICE:-$DEVICE}"
+
 # Stage 1
 STAGE1_CLASSIFIER="${MODEL_STAGE1_CLASSIFIER:-extra_trees}"
 STAGE1_CV_FOLDS="${MODEL_STAGE1_CV_FOLDS:-5}"
@@ -156,6 +161,9 @@ echo "RUN_DIR:        $RUN_DIR"
 echo "OUT_ROOT:       $OUT_ROOT"
 echo "REPORT_ROOT:    $REPORT_ROOT"
 echo "DEVICE:         $DEVICE"
+echo "STAGE1_DEVICE: $STAGE1_DEVICE"
+echo "STAGE2_DEVICE: $STAGE2_DEVICE"
+echo "STAGE3_DEVICE: $STAGE3_DEVICE"
 echo "RUN_STAGE1:     $RUN_STAGE1"
 echo "RUN_STAGE2:     $RUN_STAGE2"
 echo "RUN_STAGE3_RGCN:$RUN_STAGE3_RGCN"
@@ -284,7 +292,7 @@ run_stage2_model() {
     --report-high-specificity "$MODEL_REPORT_HIGH_SPECIFICITY"
     --report-min-recall "$MODEL_REPORT_MIN_RECALL"
     --seed "$MODEL_SEED"
-    --device "$DEVICE"
+    --device "$STAGE2_DEVICE"
   )
 
   if has_flag "$help_text" "--score-batch-size"; then
@@ -350,7 +358,7 @@ run_stage3_rgcn() {
     --dropout "$STAGE3_DROPOUT"
     --lr "$STAGE3_LR"
     --seed "$MODEL_SEED"
-    --device "$DEVICE"
+    --device "$STAGE3_DEVICE"
   )
 
   if has_flag "$help_text" "--num-neighbors"; then
@@ -428,7 +436,7 @@ run_stage3_hgt() {
     --dropout "$STAGE3_DROPOUT"
     --lr "$STAGE3_LR"
     --seed "$MODEL_SEED"
-    --device "$DEVICE"
+    --device "$STAGE3_DEVICE"
   )
 
   if has_flag "$help_text" "--num-neighbors"; then

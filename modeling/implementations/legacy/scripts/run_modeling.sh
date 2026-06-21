@@ -91,7 +91,7 @@ case "$RUN_MODE" in
       --patience "${MODEL_STAGE2_PATIENCE:-5}"
       --checkpoint-metric "${MODEL_STAGE2_CHECKPOINT_METRIC:-average_precision}"
       --num-workers "${MODEL_NUM_WORKERS:-0}"
-      --device "${MODEL_DEVICE:-auto}")
+      --device "${MODEL_STAGE2_DEVICE:-${MODEL_DEVICE:-auto}}")
     if [ "${MODEL_STAGE2_SPARSE_EMBEDDINGS:-true}" = "true" ]; then ARGS+=(--sparse-embeddings); else ARGS+=(--no-sparse-embeddings); fi
     if [ "${MODEL_STAGE2_SCORE_CANDIDATES:-false}" = "true" ]; then ARGS+=(--score-candidates); else ARGS+=(--no-score-candidates); fi
     if [ "${MODEL_STAGE2_SAVE_MAPPINGS:-false}" = "true" ]; then ARGS+=(--save-mappings); else ARGS+=(--no-save-mappings); fi
@@ -106,7 +106,7 @@ case "$RUN_MODE" in
       --num-layers "${MODEL_NUM_LAYERS:-2}"
       --batch-size "${MODEL_BATCH_SIZE:-4096}"
       --score-batch-size "${MODEL_SCORE_BATCH_SIZE:-65536}"
-      --device "${MODEL_DEVICE:-cpu}")
+      --device "${MODEL_STAGE3_DEVICE:-${MODEL_DEVICE:-cpu}}")
     ;;
   hgt)
     ARGS=(python -m pring_modeling.stage3_hgt
@@ -118,7 +118,7 @@ case "$RUN_MODE" in
       --heads "${MODEL_HGT_HEADS:-2}"
       --batch-size "${MODEL_BATCH_SIZE:-4096}"
       --score-batch-size "${MODEL_SCORE_BATCH_SIZE:-65536}"
-      --device "${MODEL_DEVICE:-cpu}")
+      --device "${MODEL_STAGE3_DEVICE:-${MODEL_DEVICE:-cpu}}")
     ;;
   stage4|explain)
     if [ -z "${MODEL_PREDICTIONS_CSV:-}" ]; then echo "MODEL_PREDICTIONS_CSV is required for stage4/explain" >&2; exit 2; fi

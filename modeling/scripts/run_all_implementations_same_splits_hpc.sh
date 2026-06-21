@@ -51,7 +51,14 @@ PYDEVICE
 )"
 fi
 export MODEL_DEVICE
+# Stage 2 KGE has very large embedding tables and commonly exceeds 8 GB GPUs.
+# Default it to CPU unless explicitly overridden, while Stage 3 can still use GPU.
+MODEL_STAGE2_DEVICE="${MODEL_STAGE2_DEVICE:-cpu}"
+MODEL_STAGE3_DEVICE="${MODEL_STAGE3_DEVICE:-$MODEL_DEVICE}"
+export MODEL_STAGE2_DEVICE MODEL_STAGE3_DEVICE
 printf 'Resolved model device: %s\n' "$MODEL_DEVICE"
+printf 'Resolved Stage 2 device: %s\n' "$MODEL_STAGE2_DEVICE"
+printf 'Resolved Stage 3 device: %s\n' "$MODEL_STAGE3_DEVICE"
 
 # Use improved_v2 for shared split preparation because it contains the newest neutral helper.
 bash "$MODEL_ROOT/scripts/use_implementation.sh" improved_v2
