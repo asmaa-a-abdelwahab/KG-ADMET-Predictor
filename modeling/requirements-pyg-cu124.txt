@@ -1,3 +1,1 @@
---find-links https://data.pyg.org/whl/torch-2.5.0+cu124.html
-pyg_lib
-torch_sparse
+implementations/improved/requirements-pyg-cu124.txt
