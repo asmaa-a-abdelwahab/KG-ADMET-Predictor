@@ -7,8 +7,9 @@ IMPL="${1:-${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}}"
 case "$IMPL" in
   legacy|old) IMPL="legacy" ;;
   improved|new) IMPL="improved" ;;
+  improved_v2|final|finalized|v2) IMPL="improved_v2" ;;
   *)
-    echo "ERROR: Unknown implementation '$IMPL'. Use MODEL_IMPL=legacy or MODEL_IMPL=improved." >&2
+    echo "ERROR: Unknown implementation '$IMPL'. Use MODEL_IMPL=legacy, MODEL_IMPL=improved, or MODEL_IMPL=improved_v2." >&2
     exit 2
     ;;
 esac
