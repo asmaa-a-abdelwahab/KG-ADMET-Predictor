@@ -103,10 +103,16 @@ services:
 
   predictor:
     init: true
+    shm_size: "1gb"
     stop_grace_period: 30s
     build:
       context: .
-      dockerfile: ./modeling/Dockerfile.predictor
+      dockerfile: ./modeling/Dockerfile
+      args:
+        TORCH_VERSION: "${TORCH_VERSION:-2.5.1}"
+        TORCH_GEOMETRIC_VERSION: "${TORCH_GEOMETRIC_VERSION:-2.6.1}"
+        PYTORCH_INDEX_URL: "${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+        PYG_WHEEL_URL: "${PYG_WHEEL_URL:-https://data.pyg.org/whl/torch-2.5.1+cpu.html}"
     container_name: kg-admet-predictor
     restart: unless-stopped
     depends_on:
@@ -117,45 +123,44 @@ services:
     environment:
       PRODUCTION_MODEL_DIR: "/models/production"
       PRECOMPUTED_SCORE_FRAME: "/results/production/finalized_training_frame.csv"
-      PREDICTION_SCORE_MODE: "precomputed"
-      PREDICTION_MAX_PAIRS_PER_REQUEST: "${PREDICTION_MAX_PAIRS_PER_REQUEST:-25}"
-      PREDICTION_TREE_SHAP_ENABLED: "false"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      MALLOC_ARENA_MAX: "1"
+      PREDICTION_SCORE_MODE: "${PREDICTION_SCORE_MODE:-auto}"
+      PREDICTION_PERSIST_NEW_SCORES: "${PREDICTION_PERSIST_NEW_SCORES:-true}"
+      PREDICTION_REQUIRE_CACHE_WRITE: "${PREDICTION_REQUIRE_CACHE_WRITE:-true}"
+      PREDICTION_CACHE_BACKUP: "${PREDICTION_CACHE_BACKUP:-true}"
+      PREDICTION_DEVICE: "${PREDICTION_DEVICE:-cpu}"
+      # Keep CPU allocation and glibc arenas bounded to reduce peak RSS while
+      # loading the shared Stage 3 graph and both checkpoints.
+      OMP_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      MKL_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      OPENBLAS_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
+      PREDICTION_UNLOAD_STAGE3_AFTER_SCORE: "${PREDICTION_UNLOAD_STAGE3_AFTER_SCORE:-true}"
+      PREDICTION_UNLOAD_SHARED_GRAPH_AFTER_SCORE: "${PREDICTION_UNLOAD_SHARED_GRAPH_AFTER_SCORE:-false}"
+      PREDICTION_STAGE3_BATCH_SIZE: "${PREDICTION_STAGE3_BATCH_SIZE:-1}"
+      PREDICTION_ALLOW_COMPONENT_FALLBACK: "${PREDICTION_ALLOW_COMPONENT_FALLBACK:-true}"
+      PREDICTION_ENABLE_TREE_SHAP: "${PREDICTION_ENABLE_TREE_SHAP:-false}"
+      PREDICTION_MAX_PAIRS: "${PREDICTION_MAX_PAIRS:-9}"
+      PREDICTION_MAX_PAIRS_PER_REQUEST: "${PREDICTION_MAX_PAIRS_PER_REQUEST:-9}"
+      STAGE1_MODEL_DIR: "${STAGE1_MODEL_DIR:-/models/improved_v2/stage1_gds_extra_trees}"
+      STAGE1_EMBEDDING_PROPERTY: "${STAGE1_EMBEDDING_PROPERTY:-pringFastRP}"
+      RGCN_MODEL_DIR: "${RGCN_MODEL_DIR:-/models/improved_v2/stage3_rgcn_sampled}"
+      HGT_MODEL_DIR: "${HGT_MODEL_DIR:-/models/improved_v2/stage3_hgt_sampled}"
+      STAGE3_PREPARED_DIR: "${STAGE3_PREPARED_DIR:-/modeling_prepared}"
       NEO4J_URI: "bolt://neo4j:7687"
       NEO4J_USER: "${NEO4J_USER:-neo4j}"
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
       NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     volumes:
       - ./artifacts/models:/models:ro
-      - ./artifacts/results:/results:ro
-    command:
-      - python
-      - -m
-      - uvicorn
-      - pring_modeling.prediction_api:app
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
-      - --workers
-      - "1"
-      - --timeout-keep-alive
-      - "10"
+      - ./artifacts/results:/results
+      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:ro
+    command: ["python", "-m", "uvicorn", "pring_modeling.prediction_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     healthcheck:
-      # Liveness, not readiness: missing model assets must not make Docker
-      # repeatedly classify a running API process as unhealthy.
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/live', timeout=5)"
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=5)"]
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 30s
+      start_period: 45s
 
   streamlit:
     build:

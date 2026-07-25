@@ -182,7 +182,7 @@ def get_compound_names(driver: Driver) -> List[str]:
     views. This query lists compounds with Interaction or BioAssay evidence first.
     """
     query = """
-    CALL {
+    CALL () {
       MATCH (c:Compound)<-[:ASSERTS_CHEMICAL]-(:Interaction)
       RETURN c, 3 AS priority
       UNION
@@ -207,7 +207,7 @@ def get_compound_names(driver: Driver) -> List[str]:
 def get_gene_symbols(driver: Driver) -> List[str]:
     """Return CYP450 target display values from Protein nodes."""
     query = """
-    CALL {
+    CALL () {
       MATCH (:Interaction)-[:ASSERTS_TARGET]->(p:Protein)
       RETURN p, 2 AS priority
       UNION
@@ -250,7 +250,7 @@ def show_bioassays(driver: Driver, compound_names: List[str]):
     if not compound_names:
         raise ValueError("Please select at least one compound.")
     query = f"""
-    CALL {{
+    CALL () {{
       MATCH path=(ba:BioAssay)-[:HAS_MEASURE_GROUP]->(mg:MeasureGrp)-[:HAS_ENDPOINT]->(e:Endpoint)-[:ABOUT_SUBSTANCE]->(s:Substance)-[:STANDARDIZED_TO]->(c:Compound)
       WHERE {COMPOUND_FILTER}
       RETURN path
@@ -277,7 +277,7 @@ def show_cooccurrence_cpd_cpd(driver: Driver, compound_names: List[str], gene_sy
     if not compound_names:
         raise ValueError("Please select at least one compound.")
     query = f"""
-    CALL {{
+    CALL () {{
       MATCH path=(c:Compound)<-[:ASSERTS_CHEMICAL]-(i1:Interaction)-[:ASSERTS_TARGET]->(p:Protein)<-[:ASSERTS_TARGET]-(i2:Interaction)-[:ASSERTS_CHEMICAL]->(c2:Compound)
       WHERE {COMPOUND_FILTER}
         AND elementId(c2) <> elementId(c)
@@ -307,7 +307,7 @@ def show_cooccurrence_cpd_gene(driver: Driver, compound_names: List[str], gene_s
     if not compound_names or not gene_symbols:
         raise ValueError("Please select at least one compound and one CYP450 target.")
     query = f"""
-    CALL {{
+    CALL () {{
       MATCH path=(c:Compound)<-[:ASSERTS_CHEMICAL]-(i:Interaction)-[:ASSERTS_TARGET]->(p:Protein)
       WHERE {COMPOUND_FILTER}
         AND {TARGET_FILTER}

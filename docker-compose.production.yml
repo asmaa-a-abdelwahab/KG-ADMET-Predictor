@@ -1,46 +1,36 @@
 name: kg-admet-pring-production
 
+# Use together with the main compose file:
+# docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 services:
   predictor:
-    build:
-      context: .
-      dockerfile: ./modeling/Dockerfile.predictor
-    container_name: kg-admet-predictor
-    restart: unless-stopped
-    ports:
-      - "${PREDICTOR_PORT:-8000}:8000"
     environment:
-      PRODUCTION_MODEL_DIR: /models/production
-      PRECOMPUTED_SCORE_FRAME: /results/production/finalized_training_frame.csv
-      PREDICTION_SCORE_MODE: precomputed
-      PREDICTION_ALLOW_LIVE_STAGE3: "false"
-      PREDICTION_MAX_PAIRS_PER_REQUEST: "${PREDICTION_MAX_PAIRS_PER_REQUEST:-25}"
-      PREDICTION_TREE_SHAP_ENABLED: "false"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      MALLOC_ARENA_MAX: "1"
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: "${NEO4J_USER:-neo4j}"
-      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
-      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+      PREDICTION_SCORE_MODE: auto
+      PREDICTION_PERSIST_NEW_SCORES: "true"
+      PREDICTION_REQUIRE_CACHE_WRITE: "true"
+      PREDICTION_CACHE_BACKUP: "true"
+      PREDICTION_UNLOAD_STAGE3_AFTER_SCORE: "true"
+      PREDICTION_UNLOAD_SHARED_GRAPH_AFTER_SCORE: "false"
+      PREDICTION_STAGE3_BATCH_SIZE: "1"
+      PREDICTION_ENABLE_TREE_SHAP: "false"
+      PREDICTION_MAX_PAIRS_PER_REQUEST: "${PREDICTION_MAX_PAIRS_PER_REQUEST:-9}"
+      OMP_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      MKL_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      OPENBLAS_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
+      MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
     volumes:
       - ./artifacts/models:/models:ro
-      - ./artifacts/results:/results:ro
-    command: ["python", "-m", "uvicorn", "pring_modeling.prediction_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-keep-alive", "10"]
+      - ./artifacts/results:/results
+      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=5)"]
       interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
+      timeout: 10s
+      retries: 20
+      start_period: 45s
 
   streamlit:
     environment:
       PREDICTION_API_URL: http://predictor:8000
       PREDICTION_CONNECT_TIMEOUT_SECONDS: "10"
-      PREDICTION_TIMEOUT_SECONDS: "120"
+      PREDICTION_TIMEOUT_SECONDS: "${PREDICTION_TIMEOUT_SECONDS:-1800}"

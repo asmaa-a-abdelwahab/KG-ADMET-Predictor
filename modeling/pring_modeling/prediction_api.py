@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Any
 
@@ -7,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .prediction_service import PRINGPredictionService
+from .pyg_runtime import initialize_pyg_runtime
 
 
 class PredictionRequest(BaseModel):
@@ -20,11 +22,8 @@ def get_service() -> PRINGPredictionService:
 
 
 def _service_status() -> dict[str, Any]:
-    """Return readiness details without converting them into an HTTP error."""
     try:
-        status = get_service().status()
-        status["ready"] = status.get("status") == "ready"
-        return status
+        return get_service().status()
     except Exception as exc:
         return {
             "status": "not_ready",
@@ -34,34 +33,43 @@ def _service_status() -> dict[str, Any]:
         }
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Import PyG once, in a controlled order, before health checks and prediction
+    # requests can import separate PyG submodules concurrently.
+    initialize_pyg_runtime()
+    service = get_service()
+    yield
+    service.close()
+
+
 app = FastAPI(
-    title="PRING Production Interaction Predictor",
-    version="2.0.1",
+    title="PRING Hybrid Interaction Predictor",
+    version="3.0.0",
     description=(
-        "Production API using precomputed component-model scores, a locked calibrated "
-        "ensemble, and Neo4j evidence retrieval. Full heterogeneous-graph scoring is an "
-        "offline batch/HPC responsibility."
+        "Precomputed-first prediction API. Existing component scores are reused; "
+        "missing compound-CYP450 pairs are scored by the deployable Stage 1, R-GCN "
+        "and HGT components and persisted to the production score cache."
     ),
+    lifespan=lifespan,
 )
 
 
 @app.get("/live")
 def live() -> dict[str, str]:
-    """Liveness probe: 200 means the API process is running."""
     return {"status": "alive"}
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    """Diagnostic status: always returns JSON so missing assets are visible."""
+    """Diagnostic endpoint; always returns JSON while the API process is alive."""
     return _service_status()
 
 
 @app.get("/ready")
 def ready() -> dict[str, Any]:
-    """Readiness probe: 503 until all production-serving assets are usable."""
     status = _service_status()
-    if not status.get("ready"):
+    if status.get("status") != "ready":
         raise HTTPException(status_code=503, detail=status)
     return status
 
@@ -74,9 +82,8 @@ def model_info() -> dict[str, Any]:
 @app.post("/predict")
 def predict(request: PredictionRequest) -> dict[str, Any]:
     status = _service_status()
-    if not status.get("ready"):
+    if status.get("status") != "ready":
         raise HTTPException(status_code=503, detail=status)
-
     try:
         return get_service().predict_many(request.compounds, request.targets)
     except ValueError as exc:
@@ -84,8 +91,5 @@ def predict(request: PredictionRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
+            detail={"error_type": type(exc).__name__, "error": str(exc)},
         ) from exc

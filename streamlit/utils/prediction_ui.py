@@ -33,12 +33,30 @@ def _prediction_label(item: dict[str, Any]) -> str:
     return f"{pair.get('compound_name', pair.get('cid', 'Compound'))} → {pair.get('target_name', pair.get('protein_id', 'Target'))}"
 
 
-def _selected_prediction(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _selected_prediction(
+    payload: dict[str, Any],
+    *,
+    selector_key: str,
+) -> dict[str, Any] | None:
+    """Return the prediction selected within one result tab.
+
+    Streamlit evaluates the content of every tab during the same script run. Each
+    selectbox therefore needs a distinct widget key, even though only one tab is
+    visible at a time.
+    """
     predictions = payload.get("predictions", []) or []
     if not predictions:
         return None
+
     labels = [_prediction_label(item) for item in predictions]
-    selected = st.selectbox("Prediction to inspect", labels, key="prediction_pair_selector") if len(labels) > 1 else labels[0]
+    if len(labels) == 1:
+        return predictions[0]
+
+    selected = st.selectbox(
+        "Prediction to inspect",
+        labels,
+        key=f"prediction_pair_selector_{selector_key}",
+    )
     return predictions[labels.index(selected)]
 
 
@@ -60,7 +78,7 @@ def _render_summary(payload: dict[str, Any]) -> None:
         with st.expander(f"Pairs not scored ({len(errors)})", expanded=True):
             st.dataframe(pd.DataFrame(errors), use_container_width=True, hide_index=True)
 
-    item = _selected_prediction(payload)
+    item = _selected_prediction(payload, selector_key="prediction")
     if not item:
         return
     pred = item.get("prediction", {})
@@ -73,6 +91,13 @@ def _render_summary(payload: dict[str, Any]) -> None:
     c4.metric("Confidence", str(uncertainty.get("confidence_band", "N/A")).title())
     st.info(item.get("interpretation", {}).get("statement", ""))
     score_source = str(item.get("model", {}).get("score_source", ""))
+    if score_source == "live_component_inference":
+        cache_status = item.get("prediction_cache", {}).get("status", "unknown")
+        st.caption(f"This pair was scored by the live model components. Cache update status: {cache_status}.")
+    elif score_source == "live_component_inference_cached":
+        st.caption("This pair was previously scored by the live models and was returned from the persistent prediction cache.")
+    elif score_source.startswith("precomputed"):
+        st.caption("This pair was returned from the validated precomputed component-score frame.")
     if score_source.startswith("degraded"):
         component_status = item.get("component_details", {}).get("component_status", {})
         st.warning(
@@ -89,7 +114,7 @@ def _render_summary(payload: dict[str, Any]) -> None:
 
 def _render_explainability(payload: dict[str, Any]) -> None:
     st.markdown("## Explainability and model diagnostics")
-    item = _selected_prediction(payload)
+    item = _selected_prediction(payload, selector_key="model_explanation")
     if not item:
         st.warning("No successful prediction is available to explain.")
         return
@@ -157,7 +182,7 @@ def _render_explainability(payload: dict[str, Any]) -> None:
 
 def _render_evidence(payload: dict[str, Any]) -> None:
     st.markdown("## Knowledge-graph evidence")
-    item = _selected_prediction(payload)
+    item = _selected_prediction(payload, selector_key="evidence")
     if not item:
         st.warning("No successful prediction is available.")
         return
@@ -222,22 +247,13 @@ def _render_report(payload: dict[str, Any]) -> None:
 
 
 def display_prediction_workspace(payload: dict[str, Any]) -> None:
-    st.markdown(
-        """
-        <section class="kg-landing-hero kg-landing-hero-compact">
-            <div class="kg-hero-eyebrow">PRING predictive modeling</div>
-            <h1>Missing Interaction Predictor</h1>
-            <p>Calibrated compound-CYP450 predictions with model contribution, uncertainty, validation metrics and Neo4j evidence reconstruction.</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
+    """Render prediction outputs without replacing the application main-page design."""
+    prediction_tab, explanation_tab, evidence_tab, report_tab = st.tabs(
+        ["Prediction", "Model Explanation", "Evidence", "Download Report"]
     )
-    result_tab, explain_tab, evidence_tab, report_tab = st.tabs(
-        ["Prediction Results", "Explainability", "Evidence", "Prediction Report"]
-    )
-    with result_tab:
+    with prediction_tab:
         _render_summary(payload)
-    with explain_tab:
+    with explanation_tab:
         _render_explainability(payload)
     with evidence_tab:
         _render_evidence(payload)

@@ -1,23 +1,43 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ProjectRoot
+    [string]$ProjectRoot,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PatchRoot = $PSScriptRoot
 )
 
 $ErrorActionPreference = "Stop"
-$PatchRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
-$Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$BackupRoot = Join-Path $ProjectRoot "patch_backups\oom_shared_graph_$Timestamp"
 
-$Files = @(
-    "modeling\pring_modeling\prediction_service.py",
+$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+$PatchRoot = (Resolve-Path $PatchRoot).Path
+
+$RelativeFiles = @(
+    "modeling\Dockerfile",
     "modeling\requirements.txt",
-    "docker-compose.yml"
+    "modeling\pring_modeling\live_prediction.py",
+    "modeling\pring_modeling\prediction_service.py",
+    "modeling\pring_modeling\prediction_api.py",
+    "modeling\pring_modeling\pyg_runtime.py",
+    "streamlit\app.py",
+    "streamlit\utils\ui_utils.py",
+    "streamlit\utils\prediction_ui.py",
+    "streamlit\utils\prediction_client.py",
+    "docker-compose.yml",
+    "docker-compose.production.yml"
 )
 
+if ($ProjectRoot.TrimEnd('\') -eq $PatchRoot.TrimEnd('\')) {
+    Write-Host "PatchRoot and ProjectRoot are the same directory."
+    Write-Host "The patch was extracted directly into the repository, so no copy operation is required."
+    Write-Host "Verify the files and merge hybrid_prediction.env.snippet into .env."
+    exit 0
+}
+
+$Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$BackupRoot = Join-Path $ProjectRoot "patch_backups\hybrid_prediction_$Timestamp"
 New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
 
-foreach ($RelativePath in $Files) {
+foreach ($RelativePath in $RelativeFiles) {
     $Source = Join-Path $PatchRoot $RelativePath
     $Destination = Join-Path $ProjectRoot $RelativePath
     $Backup = Join-Path $BackupRoot $RelativePath
@@ -38,4 +58,4 @@ foreach ($RelativePath in $Files) {
 
 Write-Host ""
 Write-Host "Backup created at: $BackupRoot"
-Write-Host "Merge memory.env.snippet into your existing .env, then rebuild predictor and recreate Neo4j."
+Write-Host "Merge hybrid_prediction.env.snippet into the existing .env before rebuilding."

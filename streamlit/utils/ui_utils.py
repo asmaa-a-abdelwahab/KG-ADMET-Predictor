@@ -34,7 +34,7 @@ ACTION_DESCRIPTIONS = {
     "Evidence Co-Occurrence (Compound-Target)": "Inspect compound-target evidence paths for selected compounds and CYP450 proteins, including interaction assertions and support where available.",
     "Compound-Target Interactions (PubChem)": "Show direct PRING Interaction nodes asserting a selected compound-CYP450 target relationship and their supporting evidence.",
     "Compound-Target Enrichment Context": "Expand selected compound-target pairs with chemical properties, structures, GO/Reactome/InterPro/PDB/AlphaFold, and other feature context.",
-    "Predict Missing Interaction": "Predict a compound-CYP450 interaction with the deployable PRING ensemble, calibrated probability, uncertainty, model contribution, and evidence-linked explanation.",
+    "Predict Missing Interaction": "Use cached component scores when available; otherwise run the deployable PRING ensemble and save the new component scores for future requests.",
 }
 
 ACTION_BADGES = {
@@ -54,7 +54,7 @@ ACTION_QUESTION = {
     "Evidence Co-Occurrence (Compound-Target)": "Do my compounds and targets appear together in evidence paths?",
     "Compound-Target Interactions (PubChem)": "Which direct compound-target interaction assertions are present?",
     "Compound-Target Enrichment Context": "What feature and annotation context surrounds the pair?",
-    "Predict Missing Interaction": "Is a missing compound-target interaction predicted by the best deployable model?",
+    "Predict Missing Interaction": "Is a missing compound-target interaction supported by the deployable model?",
 }
 
 
@@ -181,7 +181,6 @@ def display_sidebar(compound_list, gene_list):
             selected_genes = st.multiselect(
                 "Search CYP450 targets",
                 gene_list,
-                max_selections=5,
                 key="form_selected_genes",
                 placeholder="Search by CYP symbol or UniProt accession",
                 label_visibility="collapsed",
@@ -196,8 +195,7 @@ def display_sidebar(compound_list, gene_list):
                 unsafe_allow_html=True,
             )
 
-        submit_label = "Predict interaction" if action == "Predict Missing Interaction" else "Run analysis"
-        submitted = st.form_submit_button(submit_label, use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Run analysis", use_container_width=True, type="primary")
 
     if not target_required:
         selected_genes = []

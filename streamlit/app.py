@@ -77,8 +77,8 @@ def _show_welcome(statistics: dict[str, Any]) -> None:
             <div class="kg-hero-eyebrow">PRING knowledge graph</div>
             <h1>CYP450-KG Explorer</h1>
             <p>
-                A guided evidence and prediction workspace for compound similarity, PubChem BioAssay provenance,
-                CYP450 interaction assertions, enrichment context, and calibrated missing-interaction prediction.
+                A guided evidence browser for compound similarity, PubChem BioAssay provenance,
+                CYP450 interaction assertions, and enrichment context from PRING-generated Neo4j graphs.
             </p>
             {setup_callout}
         </section>
@@ -101,10 +101,6 @@ def _show_welcome(statistics: dict[str, Any]) -> None:
                 <div class="kg-analysis-card kg-analysis-card-red">
                     <strong>Target-aware analyses</strong>
                     <span>Compound-CYP450 co-occurrence, direct interactions, and enrichment context.</span>
-                </div>
-                <div class="kg-analysis-card kg-analysis-card-muted">
-                    <strong>Predict missing interactions</strong>
-                    <span>Run the deployable PRING ensemble with calibration, explainability, uncertainty, and evidence reconstruction.</span>
                 </div>
             </div>
         </section>
@@ -136,7 +132,7 @@ def _show_welcome(statistics: dict[str, Any]) -> None:
                     <span class="kg-step-badge">4</span>
                     <h3>Export results</h3>
                 </div>
-                <p>Download graph JSON/HTML, tables, or a complete model prediction report for documentation and thesis use.</p>
+                <p>Download graph JSON/HTML, tables, and the HTML report for documentation or thesis use.</p>
             </div>
         </section>
 
@@ -147,7 +143,6 @@ def _show_welcome(statistics: dict[str, Any]) -> None:
                     <li><strong>Knowledge Graph:</strong> interactive topology with draggable nodes, zoom, pan, and pinned tooltips.</li>
                     <li><strong>Tabular Data:</strong> collapsible node and relationship tables for exact property inspection.</li>
                     <li><strong>Summary Report:</strong> the main interpretable output explaining evidence paths in plain language.</li>
-                    <li><strong>Prediction workspace:</strong> calibrated probability, TreeSHAP, local contributions, uncertainty, evidence tiers, and downloadable report.</li>
                 </ul>
             </div>
             <div>
@@ -320,7 +315,7 @@ def main() -> None:
             st.session_state["last_selected_compounds"] = []
             st.session_state["last_selected_genes"] = []
         except Exception as exc:
-            st.error("The action failed. Check the connected graph and prediction/model artifacts.")
+            st.error("The query failed. Check whether the selected data exists in the PRING Neo4j graph.")
             st.exception(exc)
             logger.exception("Streamlit action failed")
             st.session_state["last_result"] = None

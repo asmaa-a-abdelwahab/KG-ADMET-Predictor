@@ -5,12 +5,9 @@ from typing import Any
 
 import requests
 
-PREDICTION_API_URL = os.getenv(
-    "PREDICTION_API_URL",
-    "http://predictor:8000",
-).rstrip("/")
+PREDICTION_API_URL = os.getenv("PREDICTION_API_URL", "http://predictor:8000").rstrip("/")
 CONNECT_TIMEOUT = int(os.getenv("PREDICTION_CONNECT_TIMEOUT_SECONDS", "10"))
-READ_TIMEOUT = int(os.getenv("PREDICTION_TIMEOUT_SECONDS", "120"))
+READ_TIMEOUT = int(os.getenv("PREDICTION_TIMEOUT_SECONDS", "1800"))
 
 
 class PredictionAPIError(RuntimeError):
@@ -29,7 +26,7 @@ def get_prediction_status() -> dict[str, Any]:
     try:
         response = requests.get(
             f"{PREDICTION_API_URL}/health",
-            timeout=(CONNECT_TIMEOUT, 15),
+            timeout=(CONNECT_TIMEOUT, 30),
         )
         response.raise_for_status()
         return response.json()
@@ -43,10 +40,7 @@ def get_prediction_status() -> dict[str, Any]:
         }
 
 
-def predict_interactions(
-    compounds: list[str],
-    targets: list[str],
-) -> dict[str, Any]:
+def predict_interactions(compounds: list[str], targets: list[str]) -> dict[str, Any]:
     try:
         response = requests.post(
             f"{PREDICTION_API_URL}/predict",
@@ -56,14 +50,13 @@ def predict_interactions(
         )
     except requests.ConnectionError as exc:
         raise PredictionAPIError(
-            "The production predictor could not be reached. "
-            f"URL={PREDICTION_API_URL}. "
-            f"Root cause: {type(exc).__name__}: {exc}"
+            "The predictor API connection was interrupted. The service may have restarted or exceeded "
+            f"its memory allocation. URL={PREDICTION_API_URL}. Root cause: {type(exc).__name__}: {exc}"
         ) from exc
     except requests.Timeout as exc:
         raise PredictionAPIError(
-            f"Prediction exceeded the {READ_TIMEOUT}-second timeout. "
-            f"URL={PREDICTION_API_URL}. "
+            f"Prediction exceeded the {READ_TIMEOUT}-second timeout. New pairs require live Stage 1, "
+            "R-GCN and HGT inference, while cached pairs should return quickly. "
             f"Root cause: {type(exc).__name__}: {exc}"
         ) from exc
     except requests.RequestException as exc:
@@ -74,7 +67,6 @@ def predict_interactions(
 
     if response.status_code >= 400:
         raise PredictionAPIError(
-            f"Prediction service error ({response.status_code}): "
-            f"{_response_detail(response)}"
+            f"Prediction service error ({response.status_code}): {_response_detail(response)}"
         )
     return response.json()
