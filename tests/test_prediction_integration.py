@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+os.environ.setdefault("PRODUCTION_MODEL_DIR", str(ROOT / "artifacts/models/production"))
+os.environ.setdefault("PRECOMPUTED_SCORE_FRAME", str(ROOT / "artifacts/results/production/finalized_training_frame.csv"))
+os.environ.setdefault("PREDICTION_SCORE_MODE", "precomputed")
+
+from pring_modeling.prediction_service import PRINGPredictionService
+from utils.prediction_report import generate_prediction_report_html, prediction_summary_dataframe
+
+
+def test_precomputed_active_and_inactive_predictions() -> None:
+    frame = pd.read_csv(os.environ["PRECOMPUTED_SCORE_FRAME"])
+    active = frame[frame["label"].eq(1)].iloc[0]
+    inactive = frame[frame["label"].eq(0)].iloc[0]
+    service = PRINGPredictionService()
+    try:
+        output = service.predict_many(
+            [active["compound_key"], inactive["compound_key"]],
+            [active["target_key"], inactive["target_key"]],
+        )
+    finally:
+        service.close()
+    assert output["successful_pairs"] >= 2
+    assert output["model_status"]["precomputed_score_lookup"] is True
+    assert any(p["prediction"]["predicted_label"] == 1 for p in output["predictions"])
+    assert any(p["prediction"]["predicted_label"] == 0 for p in output["predictions"])
+    for prediction in output["predictions"]:
+        assert 0.0 <= prediction["prediction"]["calibrated_probability"] <= 1.0
+        assert prediction["explainability"]["local_component_contributions"]
+        assert prediction["explainability"]["tree_shap"]["status"] in {"computed", "unavailable"}
+
+
+def test_unknown_pair_returns_explicit_error() -> None:
+    service = PRINGPredictionService()
+    try:
+        output = service.predict_many(
+            ["Compound|cid=999999999"],
+            ["Protein|protein_id=P08684"],
+        )
+    finally:
+        service.close()
+    assert output["successful_pairs"] == 0
+    assert "not present in the precomputed score frame" in output["errors"][0]["error"]
+
+
+def test_report_exports() -> None:
+    frame = pd.read_csv(os.environ["PRECOMPUTED_SCORE_FRAME"], nrows=1)
+    row = frame.iloc[0]
+    service = PRINGPredictionService()
+    try:
+        output = service.predict_many([row["compound_key"]], [row["target_key"]])
+    finally:
+        service.close()
+    report = generate_prediction_report_html(output)
+    summary = prediction_summary_dataframe(output)
+    assert "PRING compound-target prediction report" in report
+    assert "TreeSHAP" in report
+    assert not summary.empty
+    assert "calibrated_probability" in summary.columns

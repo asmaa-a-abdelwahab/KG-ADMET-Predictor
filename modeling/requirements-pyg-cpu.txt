@@ -1,0 +1,7 @@
+# Install only after torch==2.5.1 is installed.
+# Install the exact PyTorch 2.5.1 extension wheels from data.pyg.org.
+--find-links https://data.pyg.org/whl/torch-2.5.1+cpu.html
+--no-index
+pyg_lib
+torch_scatter
+torch_sparse

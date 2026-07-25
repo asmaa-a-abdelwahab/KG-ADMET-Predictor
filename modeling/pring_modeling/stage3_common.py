@@ -8,10 +8,7 @@ import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 
-try:
-    from torch_geometric.data import HeteroData
-except Exception:  # pragma: no cover
-    HeteroData = None  # type: ignore
+from .pyg_runtime import get_pyg_symbol, pyg_runtime_status
 
 from .common import STAGE3, pick_col, read_pairs, read_table, resolve_stage_dir
 
@@ -390,8 +387,7 @@ def _add_edge_by_type_payload(data: Any, obj: dict[str, Any]) -> bool:
 
 
 def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> Any | None:
-    if HeteroData is None:
-        return None
+    HeteroData = get_pyg_symbol("HeteroData")
 
     # Common wrapper keys.
     for key in ['data', 'heterodata', 'hetero_data', 'pyg_data']:
@@ -484,8 +480,7 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
     return None
 
 def _load_heterodata_from_csv(stage_dir: Path) -> Any | None:
-    if HeteroData is None:
-        return None
+    HeteroData = get_pyg_symbol("HeteroData")
     data = HeteroData()
     _set_node_store_from_mapping(data, stage_dir)
     ok = _add_edges_from_csv(data, stage_dir)
@@ -503,8 +498,16 @@ def load_heterodata(stage_dir: Path):
     falls back to the CSV exports, preferring ``edge_index_train_only.csv`` to keep
     validation/test interaction evidence leakage-safe.
     """
-    if HeteroData is None:
-        raise RuntimeError("PyTorch Geometric is required for Stage 3. Install torch-geometric matching your PyTorch build.")
+    try:
+        HeteroData = get_pyg_symbol("HeteroData")
+    except Exception as exc:
+        status = pyg_runtime_status(include_traceback=True)
+        detail = f"{status.get('error_type', type(exc).__name__)}: {status.get('error', str(exc))}"
+        raise RuntimeError(
+            "PyTorch Geometric could not be initialized inside the predictor container. "
+            f"Root cause: {detail}. The complete traceback is available from /health. "
+            "Recreate the predictor after confirming the pinned PyTorch/PyG wheels."
+        ) from exc
 
     candidates = [
         stage_dir / "pyg_export" / "heterodata.pt",

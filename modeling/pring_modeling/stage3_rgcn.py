@@ -10,12 +10,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-try:
-    from torch_geometric.loader import LinkNeighborLoader
-    from torch_geometric.nn import RGCNConv
-except Exception:  # pragma: no cover
-    LinkNeighborLoader = None  # type: ignore
-    RGCNConv = None  # type: ignore
+from .pyg_runtime import get_pyg_symbol
+
+# All Stage 3 modules reuse the process-wide, startup-initialized PyG runtime.
+# This avoids independent imports of torch_geometric.data/loader from request threads.
+LinkNeighborLoader = get_pyg_symbol("LinkNeighborLoader")
+RGCNConv = get_pyg_symbol("RGCNConv")
 
 from .common import ensure_dir, get_device, save_json, set_seed
 from .model_diagnostics import (
