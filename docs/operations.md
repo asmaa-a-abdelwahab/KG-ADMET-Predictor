@@ -51,6 +51,12 @@ unrestricted. Review plugin versions and database migrations before upgrades.
 ## Documentation deployment
 
 The documentation workflow builds with `mkdocs build --strict` and deploys a
-Pages artifact. In GitHub repository settings, configure Pages to use **GitHub
-Actions**.
+Pages artifact. Before the first deployment, a repository administrator must
+open **Settings → Pages → Build and deployment → Source** and select **GitHub
+Actions**. If the workflow reports `Get Pages site failed` or an HTTP 404 from
+`configure-pages`, Pages has not yet been enabled for that repository. Re-run
+the documentation workflow after changing the setting.
 
+Do not add an administrative personal access token merely to enable Pages from
+the workflow. The built-in `GITHUB_TOKEN` is sufficient for routine deployment
+after the one-time repository setting is complete.
