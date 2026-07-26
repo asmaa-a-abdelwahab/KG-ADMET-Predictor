@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Runtime helper shared by the loader, modeling, and Streamlit containers.
 # It keeps the images usable before PRING is published by installing from a
-# mounted local package directory when available, otherwise from PRING_PACKAGE_SPEC. The default PRING_PACKAGE_SPEC installs from the public PRING GitHub repository because PRING is not published on PyPI yet.
+# mounted local package directory when available, otherwise from PRING_PACKAGE_SPEC. The default PRING_PACKAGE_SPEC installs from the public PRING-PACKAGE GitHub repository because PRING is not published on PyPI yet.
 
 PRING_PACKAGE_DIR="${PRING_PACKAGE_DIR:-/workspace/pring}"
-PRING_PACKAGE_SPEC="${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+PRING_PACKAGE_SPEC="${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
 
 if python - <<'PY' >/dev/null 2>&1
 import pring

@@ -871,6 +871,12 @@ def run(args: argparse.Namespace) -> dict:
             "eval_predictions_file": str(out_dir / "eval_predictions.csv") if (out_dir / "eval_predictions.csv").exists() else None,
             "supervised_decoder": supervised_decoder_summary,
             "score_note": "KGE scores are rank scores; the exported score column is sigmoid(raw_score), not a calibrated probability. Prefer supervised_decoder.metrics for active/inactive CYP450 classification.",
+            "raw_kge_evaluation_status": "diagnostic_only",
+            "raw_kge_evaluation_warning": (
+                "Random corruptions are synthetic ranking negatives and the displayed raw-KGE "
+                "classification threshold is selected on that same diagnostic sample. Do not "
+                "treat raw KGE metrics as calibrated or publication-grade CYP450 classification."
+            ),
             "runtime_seconds": float(time.time() - t0),
             "config": {
                 "dim": args.dim,

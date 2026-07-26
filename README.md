@@ -1,6 +1,12 @@
-# KG-ADMET Predictor integrated with PRING
+# PRING-APP
 
-This repository is the application/modeling layer around the PRING package.  It no longer reimplements PubChem extraction, CSV generation, Neo4j loading, EDA, or ML export logic.  Instead, the workflow is:
+PRING-APP is the application, graph-serving, modeling, and prediction layer around
+[PRING-PACKAGE](https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE). It does not
+reimplement PubChem extraction or canonical graph generation. The workflow is:
+
+For scientific limitations, the artifact-preservation policy, retraining
+requirements, validation acceptance criteria, and release checklists, see
+[`docs/REMEDIATION_AND_RELEASE_GATES.md`](docs/REMEDIATION_AND_RELEASE_GATES.md).
 
 1. Use **PRING** to collect/process PubChem data and create a run folder.
 2. Use this repository to load that existing run into **Neo4j**.
@@ -35,6 +41,8 @@ runs/current/
       node_features_compound_model_matrix.csv
       node_features_protein_model_matrix.csv
       edge_index.csv
+      edge_index_train_only.csv
+      pyg_export/heterodata.pt
       modeling_readiness_manifest.json
 ```
 
@@ -72,16 +80,19 @@ Edit `.env` and set:
 ```dotenv
 PRING_RUNS_DIR=./runs
 PRING_RUN_DIR=/runs/current
-PRING_PROJECT_DIR=./pring
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip
+PRING_PROJECT_DIR=../PRING-PACKAGE
+PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
 ```
 
-`PRING_PROJECT_DIR` should point to a local PRING package clone if you have one, for example `A:/Repositories/PRING` on Windows. If that folder is missing or does not contain `pyproject.toml`, the containers install PRING from `PRING_PACKAGE_SPEC`. PRING is not published on PyPI, so do not set `PRING_PACKAGE_SPEC=pring`.
+`PRING_PROJECT_DIR` should point to a local PRING-PACKAGE clone, for example
+`A:/Repositories/PRING-PACKAGE` on Windows. If that folder is missing or does
+not contain `pyproject.toml`, the containers install the package from
+`PRING_PACKAGE_SPEC`. The Python import and CLI intentionally remain `pring`.
 
 ### 2.2 Start Neo4j and the app
 
 ```bash
-docker compose up -d neo4j streamlit
+docker compose up -d neo4j predictor streamlit
 ```
 
 Open:
@@ -125,19 +136,42 @@ docker compose --profile train up --build modeling
 Outputs:
 
 ```text
-artifacts/models/pring_tabular_baseline.joblib
-artifacts/models/predictions.csv
-artifacts/models/metrics.json
-artifacts/reports/modeling/modeling_summary.md
+artifacts/models/<implementation>/<stage>/
+artifacts/results/<implementation>/<stage>/
+artifacts/reports/modeling/
 ```
 
 If `MODEL_EXPORT_TO_NEO4J=true`, the modeling service writes prediction scores to Neo4j as:
 
 ```cypher
-(:Compound)-[:PREDICTED_INTERACTION {score, predicted_label, model}]->(:Protein)
+(:Compound)-[:PREDICTED_INTERACTION {
+  prediction_id, score, predicted_label, model, model_version,
+  graph_version, dataset_id, split_registry_id, exclude_from_training: true
+}]->(:Protein)
 ```
 
-### 2.5 Generate EDA outputs
+`PREDICTED_INTERACTION` is an inference-only relationship. It must never be
+used to construct supervised labels, train/validation/test splits, or reported
+evaluation metrics.
+
+### 2.5 Validate existing modeling results
+
+The checked-out `artifacts/results` folder is preserved as historical evidence.
+Audit it without modifying any artifact:
+
+```bash
+python modeling/scripts/audit_modeling_results.py \
+  --results-dir artifacts/results \
+  --model-dir artifacts/models/production
+```
+
+The current legacy production frame is detected as `diagnostic_only` when its
+component score columns were already held out before a later
+train/validation/test re-split. Reproduce it with `--allow-diagnostic`, but do
+not cite its metrics as publication-valid or deploy a replacement bundle from
+it. Retrain from registered or nested out-of-fold component predictions.
+
+### 2.6 Generate EDA outputs
 
 From your local Python environment where PRING is installed:
 
@@ -215,6 +249,23 @@ docker compose down
 docker compose down -v
 ```
 
+### Production configuration
+
+Use both compose files and set a strong `NEO4J_PASSWORD`,
+`PREDICTION_API_KEY`, and immutable `PRING_GRAPH_VERSION`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml config
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+```
+
+The production overlay refuses interpolation when those values are missing.
+Published ports bind to `127.0.0.1` by default, the prediction API requires the
+shared key when configured, stale cache entries are rejected, APOC file access
+is disabled by default, and internal exception details are hidden. Put a
+reviewed TLS reverse proxy and identity-aware access control in front of any
+non-local deployment.
+
 ---
 
 ## 6. Troubleshooting
@@ -224,7 +275,7 @@ docker compose down -v
 Check that the host path in `PRING_RUNS_DIR` exists and that `PRING_RUN_DIR` points to the mounted container path, not the host path. Example:
 
 ```dotenv
-PRING_RUNS_DIR=A:/Repositories/PRING/runs
+PRING_RUNS_DIR=A:/Repositories/PRING-PACKAGE/runs
 PRING_RUN_DIR=/runs/cyp450_5enzymes_uncapped_raw
 ```
 
@@ -239,9 +290,9 @@ PRING_PROJECT_DIR=/absolute/path/to/pring/package/root
 or:
 
 ```dotenv
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip
+PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
 # or, with git installed in the image:
-# PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING.git
+# PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE.git
 ```
 
 ### Model is not trained
@@ -266,11 +317,11 @@ Then refresh the app.
 
 ## Neo4j startup troubleshooting
 
-If `docker compose --profile load up --build pring-loader` stops with `container kg-admet-neo4j is unhealthy`, the PRING loader has not started yet. First inspect Neo4j:
+If `docker compose --profile load up --build pring-loader` stops with `container pring-app-neo4j is unhealthy`, the PRING loader has not started yet. First inspect Neo4j:
 
 ```powershell
 docker compose ps
-docker logs kg-admet-neo4j --tail 200
+docker logs pring-app-neo4j --tail 200
 ```
 
 For a fresh local database, the fastest reset is:

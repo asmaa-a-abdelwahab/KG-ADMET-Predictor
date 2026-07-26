@@ -17,8 +17,8 @@ REPORT_DIR=${REPORT_DIR:-$PROJECT_DIR/artifacts/reports/modeling}
 module purge || true
 module load python/3.11 || true
 
-python -m venv "$PROJECT_DIR/.venv-kg-admet"
-source "$PROJECT_DIR/.venv-kg-admet/bin/activate"
+python -m venv "$PROJECT_DIR/.venv-pring-app"
+source "$PROJECT_DIR/.venv-pring-app/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install -r "$PROJECT_DIR/modeling/requirements.txt"
 python -m pip install -e "$PRING_DIR"

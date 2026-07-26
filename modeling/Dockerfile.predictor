@@ -10,19 +10,34 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/kg
 
+ARG TORCH_VERSION=2.5.1
+ARG TORCH_GEOMETRIC_VERSION=2.6.1
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG PYG_WHEEL_URL=https://data.pyg.org/whl/torch-2.5.1+cpu.html
+
 COPY modeling/pring_modeling /opt/kg/pring_modeling
 COPY modeling/scripts/validate_prediction_assets.py /opt/kg/validate_prediction_assets.py
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install \
-      "pandas>=2.1,<3.0" \
-      "numpy>=1.24,<3.0" \
+      "pandas==2.2.2" \
+      "numpy==2.1.1" \
       "scikit-learn==1.8.0" \
-      "joblib>=1.3,<2.0" \
+      "joblib==1.4.2" \
       "neo4j>=5.20,<7.0" \
       "fastapi>=0.115,<1.0" \
       "uvicorn[standard]>=0.30,<1.0" \
-      "pydantic>=2.0,<3.0"
+      "pydantic>=2.0,<3.0" \
+    && python -m pip install \
+      "torch==${TORCH_VERSION}" \
+      --index-url "${PYTORCH_INDEX_URL}" \
+    && python -m pip install \
+      "torch-geometric==${TORCH_GEOMETRIC_VERSION}" \
+    && python -m pip install --no-index \
+      pyg_lib torch_scatter torch_sparse \
+      -f "${PYG_WHEEL_URL}" \
+    && python -m pip check \
+    && python -c "from pring_modeling.pyg_runtime import initialize_pyg_runtime; status=initialize_pyg_runtime(); assert status.ready, f'{status.error_type}: {status.error}'"
 
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /opt/kg

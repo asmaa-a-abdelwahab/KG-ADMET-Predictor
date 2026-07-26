@@ -6,8 +6,8 @@
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-7%12
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_gpu_%A_%a.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_gpu_%A_%a.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/stage3_gpu_%A_%a.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/stage3_gpu_%A_%a.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -34,7 +34,7 @@ fi
 if [ ! -f "$RUNNER" ]; then
   echo "ERROR: Could not find _run_selected_implementation.sh" >&2
   echo "Tried runner path: $RUNNER" >&2
-  echo "Set PROJECT_DIR=/home/asmaaali/KG-ADMET-Predictor or MODEL_ROOT=/home/asmaaali/KG-ADMET-Predictor/modeling before sbatch." >&2
+  echo "Set PROJECT_DIR=/home/asmaaali/PRING-APP or MODEL_ROOT=/home/asmaaali/PRING-APP/modeling before sbatch." >&2
   exit 2
 fi
 

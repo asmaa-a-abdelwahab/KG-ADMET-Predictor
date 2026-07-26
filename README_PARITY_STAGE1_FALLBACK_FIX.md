@@ -115,7 +115,7 @@ Merge `parity_stage1_fallback.env.snippet` into the existing `.env`.
 ## Rebuild
 
 ```powershell
-cd A:\Repositories\KG-ADMET-Predictor
+cd A:\Repositories\PRING-APP
 
 docker compose stop predictor
 docker compose rm -f predictor

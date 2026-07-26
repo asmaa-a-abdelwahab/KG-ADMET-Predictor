@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +9,17 @@ import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 
-try:
-    from torch_geometric.data import HeteroData
-except Exception:  # pragma: no cover
-    HeteroData = None  # type: ignore
+from .pyg_runtime import get_pyg_symbol, pyg_runtime_status
 
 from .common import STAGE3, pick_col, read_pairs, read_table, resolve_stage_dir
+
+
+def _allow_unscoped_graph() -> bool:
+    return os.getenv("PRING_ALLOW_UNSCOPED_HETERODATA", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def resolve_stage3_dir(modeling_dir: str | Path):
@@ -126,6 +132,12 @@ def _relation_map(stage_dir: Path) -> dict[str, tuple[str, str, str]]:
 def _add_edges_from_csv(data: Any, stage_dir: Path) -> bool:
     path = stage_dir / "edge_index_train_only.csv"
     if not path.exists():
+        if not _allow_unscoped_graph():
+            raise ValueError(
+                f"{stage_dir} has no edge_index_train_only.csv. Refusing to fall back "
+                "to the full graph for held-out evaluation. Set "
+                "PRING_ALLOW_UNSCOPED_HETERODATA=true only for legacy diagnostics."
+            )
         path = stage_dir / "edge_index.csv"
     if not path.exists():
         return False
@@ -390,7 +402,28 @@ def _add_edge_by_type_payload(data: Any, obj: dict[str, Any]) -> bool:
 
 
 def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> Any | None:
-    if HeteroData is None:
+    HeteroData = get_pyg_symbol("HeteroData")
+    declared_scope = str(obj.get("graph_scope", "") or "").lower()
+    train_payload_keys = {
+        "train_edge_index_by_type",
+        "edge_index_train_by_type",
+        "edge_index_train_only_by_type",
+    }
+    full_payload_keys = {
+        "edge_index_by_type",
+        "edge_by_type",
+        "edge_index_dict",
+        "edge_indices",
+        "edges",
+    }
+    has_train_payload = any(key in obj and obj.get(key) is not None for key in train_payload_keys)
+    has_full_payload = any(key in obj and obj.get(key) is not None for key in full_payload_keys)
+    if (
+        has_full_payload
+        and not has_train_payload
+        and declared_scope != "train_only"
+        and not _allow_unscoped_graph()
+    ):
         return None
 
     # Common wrapper keys.
@@ -398,7 +431,9 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
         if key in obj:
             val = obj[key]
             if isinstance(val, HeteroData):
-                return val
+                if str(getattr(val, "graph_scope", "") or "").lower() == "train_only" or _allow_unscoped_graph():
+                    return val
+                return None
             if isinstance(val, dict):
                 converted = _dict_to_heterodata(val, stage_dir=stage_dir)
                 if converted is not None:
@@ -407,7 +442,9 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
     # Any nested HeteroData value.
     for val in obj.values():
         if isinstance(val, HeteroData):
-            return val
+            if str(getattr(val, "graph_scope", "") or "").lower() == "train_only" or _allow_unscoped_graph():
+                return val
+            return None
 
     data = HeteroData()
 
@@ -480,16 +517,27 @@ def _dict_to_heterodata(obj: dict[str, Any], stage_dir: Path | None = None) -> A
             _add_edges_from_csv(data, stage_dir)
 
     if len(data.node_types) > 0 and len(data.edge_types) > 0:
+        if not (has_train_payload or declared_scope == "train_only") and not _allow_unscoped_graph():
+            return None
+        data.graph_scope = (
+            "train_only"
+            if has_train_payload or declared_scope == "train_only"
+            else "legacy_unscoped_override"
+        )
         return data
     return None
 
 def _load_heterodata_from_csv(stage_dir: Path) -> Any | None:
-    if HeteroData is None:
-        return None
+    HeteroData = get_pyg_symbol("HeteroData")
     data = HeteroData()
     _set_node_store_from_mapping(data, stage_dir)
     ok = _add_edges_from_csv(data, stage_dir)
     if ok and len(data.node_types) > 0 and len(data.edge_types) > 0:
+        data.graph_scope = (
+            "train_only"
+            if (stage_dir / "edge_index_train_only.csv").exists()
+            else "legacy_unscoped_override"
+        )
         return data
     return None
 
@@ -503,8 +551,16 @@ def load_heterodata(stage_dir: Path):
     falls back to the CSV exports, preferring ``edge_index_train_only.csv`` to keep
     validation/test interaction evidence leakage-safe.
     """
-    if HeteroData is None:
-        raise RuntimeError("PyTorch Geometric is required for Stage 3. Install torch-geometric matching your PyTorch build.")
+    try:
+        HeteroData = get_pyg_symbol("HeteroData")
+    except Exception as exc:
+        status = pyg_runtime_status(include_traceback=True)
+        detail = f"{status.get('error_type', type(exc).__name__)}: {status.get('error', str(exc))}"
+        raise RuntimeError(
+            "PyTorch Geometric could not be initialized inside the predictor container. "
+            f"Root cause: {detail}. The complete traceback is available from /health. "
+            "Recreate the predictor after confirming the pinned PyTorch/PyG wheels."
+        ) from exc
 
     candidates = [
         stage_dir / "pyg_export" / "heterodata.pt",
@@ -518,6 +574,14 @@ def load_heterodata(stage_dir: Path):
         try:
             obj = _torch_load(p)
             if isinstance(obj, HeteroData):
+                graph_scope = str(getattr(obj, "graph_scope", "") or "").lower()
+                if graph_scope != "train_only" and not _allow_unscoped_graph():
+                    raise ValueError(
+                        f"{p} is an unscoped/full-graph HeteroData object. "
+                        "Stage 3 requires graph_scope='train_only' to prevent held-out "
+                        "interaction edges entering message passing. Set "
+                        "PRING_ALLOW_UNSCOPED_HETERODATA=true only for legacy diagnostics."
+                    )
                 return obj
             if isinstance(obj, dict):
                 converted = _dict_to_heterodata(obj, stage_dir=stage_dir)

@@ -81,7 +81,7 @@ def run(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description='Create an HPO/seed sweep plan for finalized PRING improved_v2 models.')
     p.add_argument('--output-dir', required=True)
-    p.add_argument('--project-dir', default='/home/asmaaali/KG-ADMET-Predictor')
+    p.add_argument('--project-dir', default='/home/asmaaali/PRING-APP')
     p.add_argument('--stage', choices=['stage2', 'stage3_rgcn', 'stage3_hgt', 'all'], default='all')
     p.add_argument('--seeds', default='1 2 3 4 5')
     p.add_argument('--hidden-dims', default='64 128')

@@ -3,8 +3,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:1
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/all_models_compare_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/all_models_compare_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/all_models_compare_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/all_models_compare_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -13,7 +13,7 @@ fi
 set -euo pipefail
 
 echo "============================================================"
-echo "PRING / KG-ADMET: Run All Models + Compare"
+echo "PRING-APP: Run All Models + Compare"
 echo "Job ID: ${SLURM_JOB_ID:-unknown}"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
@@ -23,8 +23,8 @@ echo "============================================================"
 # 1. Paths
 # ------------------------------------------------------------
 
-PROJECT_DIR="/home/asmaaali/KG-ADMET-Predictor"
-DEFAULT_MODELING_DIR="/home/asmaaali/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
+PROJECT_DIR="/home/asmaaali/PRING-APP"
+DEFAULT_MODELING_DIR="/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
 
 cd "$PROJECT_DIR"
 

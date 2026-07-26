@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -38,12 +38,16 @@ def find_ensemble_prediction_files(outputs_root: str | Path) -> list[Path]:
         "eval_predictions.csv",
         "predictions.csv",
     ]
-    found: list[Path] = []
-    for name in priority_names:
-        found.extend(root.rglob(name))
+    priority = {name: index for index, name in enumerate(priority_names)}
+    found = [path for name in priority_names for path in root.rglob(name)]
+    best_by_directory: dict[Path, Path] = {}
+    for path in found:
+        current = best_by_directory.get(path.parent.resolve())
+        if current is None or priority[path.name] < priority[current.name]:
+            best_by_directory[path.parent.resolve()] = path
     unique: list[Path] = []
     seen: set[Path] = set()
-    for p in found:
+    for p in sorted(best_by_directory.values()):
         rp = p.resolve()
         if rp not in seen:
             seen.add(rp)
@@ -149,6 +153,41 @@ def _make_meta_classifier(name: str, seed: int, n_jobs: int) -> Pipeline:
     ])
 
 
+def _three_way_split(frame: pd.DataFrame, args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create compound-disjoint train/validation/test partitions when possible."""
+    idx = np.arange(len(frame))
+    if frame["compound_key"].nunique() >= 3:
+        outer = GroupShuffleSplit(n_splits=1, test_size=args.test_size, random_state=args.seed)
+        development_idx, test_idx = next(
+            outer.split(frame, frame["label"], groups=frame["compound_key"])
+        )
+        inner = GroupShuffleSplit(n_splits=1, test_size=args.valid_size, random_state=args.seed + 1)
+        relative_train, relative_valid = next(
+            inner.split(
+                frame.iloc[development_idx],
+                frame.iloc[development_idx]["label"],
+                groups=frame.iloc[development_idx]["compound_key"],
+            )
+        )
+        return development_idx[relative_train], development_idx[relative_valid], test_idx
+
+    stratify = frame["label"] if frame["label"].value_counts().min() >= 2 else None
+    development_idx, test_idx = train_test_split(
+        idx,
+        test_size=args.test_size,
+        stratify=stratify,
+        random_state=args.seed,
+    )
+    development_y = frame.iloc[development_idx]["label"]
+    relative_train, relative_valid = train_test_split(
+        np.arange(len(development_idx)),
+        test_size=args.valid_size,
+        stratify=development_y if development_y.value_counts().min() >= 2 else None,
+        random_state=args.seed + 1,
+    )
+    return development_idx[relative_train], development_idx[relative_valid], test_idx
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     out_dir = ensure_dir(args.output_dir)
     files = [Path(p) for p in args.predictions]
@@ -161,25 +200,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     score_cols = [c for c in frame.columns if c.startswith("score__")]
     if len(score_cols) < 2:
         raise ValueError("The ensemble needs at least two labelled model score columns.")
+    train_idx, valid_idx, test_idx = _three_way_split(frame, args)
+    frame["meta_split"] = "unassigned"
+    frame.loc[train_idx, "meta_split"] = "train"
+    frame.loc[valid_idx, "meta_split"] = "validation"
+    frame.loc[test_idx, "meta_split"] = "test"
     frame.to_csv(out_dir / "ensemble_training_frame.csv", index=False)
 
-    idx = np.arange(len(frame))
-    stratify = frame["label"] if frame["label"].value_counts().min() >= 2 else None
-    train_idx, test_idx = train_test_split(idx, test_size=args.test_size, stratify=stratify, random_state=args.seed)
-    train, test = frame.iloc[train_idx].reset_index(drop=True), frame.iloc[test_idx].reset_index(drop=True)
+    train = frame.iloc[train_idx].reset_index(drop=True)
+    valid = frame.iloc[valid_idx].reset_index(drop=True)
+    test = frame.iloc[test_idx].reset_index(drop=True)
     X_train, y_train = train[score_cols], train["label"].astype(int).to_numpy()
+    X_valid, y_valid = valid[score_cols], valid["label"].astype(int).to_numpy()
     X_test, y_test = test[score_cols], test["label"].astype(int).to_numpy()
 
     model = _make_meta_classifier(args.meta_classifier, args.seed, args.n_jobs)
     model.fit(X_train, y_train)
+    valid_score = model.predict_proba(X_valid)[:, 1]
     test_score = model.predict_proba(X_test)[:, 1]
-    threshold, metrics = optimize_binary_threshold(
-        y_test,
-        test_score,
+    threshold, validation_metrics = optimize_binary_threshold(
+        y_valid,
+        valid_score,
         metric=args.threshold_selection,
         min_specificity=args.min_specificity,
         min_recall=args.min_recall,
     )
+    metrics = binary_metrics(y_test, test_score, threshold)
     operating_points = operating_point_metrics(
         y_test,
         test_score,
@@ -210,15 +256,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     summary = {
         "stage": "Ensemble — stacked meta-classifier",
         "model": f"ensemble_{args.meta_classifier}",
-        "status": "trained",
+        "status": "diagnostic_only",
+        "publishable": False,
+        "scientific_warning": (
+            "The stacked model re-splits predictions produced by base-model runs. "
+            "It is not publication-valid unless every score column is generated "
+            "out-of-fold under the same registered outer split."
+        ),
         "input_prediction_files": [str(p) for p in files],
         "score_columns": score_cols,
         "rows_used": int(len(frame)),
         "train_rows": int(len(train)),
+        "validation_rows": int(len(valid)),
         "test_rows": int(len(test)),
-        "class_distribution": {"all": class_distribution(frame["label"]), "train": class_distribution(y_train), "test": class_distribution(y_test)},
+        "class_distribution": {
+            "all": class_distribution(frame["label"]),
+            "train": class_distribution(y_train),
+            "validation": class_distribution(y_valid),
+            "test": class_distribution(y_test),
+        },
         "selected_threshold": float(threshold),
+        "threshold_selection_partition": "validation",
         "threshold_selection": args.threshold_selection,
+        "validation_metrics": validation_metrics,
         "metrics": metrics,
         "operating_points": operating_points,
         "balanced_diagnostic_metrics": balanced_metrics,
@@ -240,6 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", required=True)
     p.add_argument("--meta-classifier", choices=["extra_trees", "hist_gradient_boosting", "random_forest", "logistic_regression"], default="extra_trees")
     p.add_argument("--test-size", type=float, default=0.25)
+    p.add_argument("--valid-size", type=float, default=0.20, help="Validation fraction of the non-test/development partition.")
     p.add_argument("--threshold-selection", choices=["mcc", "balanced_accuracy", "youden", "f1", "accuracy", "recall", "specificity"], default="mcc")
     p.add_argument("--min-specificity", type=float, default=0.50)
     p.add_argument("--min-recall", type=float, default=0.0)

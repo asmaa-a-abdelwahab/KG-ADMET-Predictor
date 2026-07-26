@@ -5,7 +5,7 @@
 `docker compose --profile load up --build pring-loader` ends with:
 
 ```text
-dependency failed to start: container kg-admet-neo4j is unhealthy
+dependency failed to start: container pring-app-neo4j is unhealthy
 ```
 
 This means the PRING loader did not run yet. Docker Compose stopped because the
@@ -13,17 +13,17 @@ Neo4j service did not pass its health check.
 
 ## First diagnosis commands
 
-Run these from the KG-ADMET project root:
+Run these from the PRING-APP repository root:
 
 ```powershell
 docker compose ps
-docker logs kg-admet-neo4j --tail 200
+docker logs pring-app-neo4j --tail 200
 ```
 
 If Neo4j is still running but marked unhealthy, inspect the health check result:
 
 ```powershell
-docker inspect kg-admet-neo4j --format '{{json .State.Health}}'
+docker inspect pring-app-neo4j --format '{{json .State.Health}}'
 ```
 
 ## Common fixes
@@ -110,7 +110,7 @@ If `depends_on` keeps blocking while you diagnose, start Neo4j first:
 
 ```powershell
 docker compose up -d --build neo4j
-docker logs -f kg-admet-neo4j
+docker logs -f pring-app-neo4j
 ```
 
 When the logs show that Bolt is enabled, run:
@@ -136,7 +136,7 @@ Fix: do not bind-mount `neo4j.conf`. Bake the file into the image through `neo4j
 docker compose down -v
 docker compose build --no-cache neo4j
 docker compose up -d neo4j
-docker logs -f kg-admet-neo4j
+docker logs -f pring-app-neo4j
 ```
 
 If you want the most minimal local Neo4j without APOC, remove `NEO4J_PLUGINS` and the `NEO4J_apoc_*` environment variables from `docker-compose.yml`; PRING loading does not require APOC for the standard path.

@@ -12,7 +12,13 @@ import pandas as pd
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import GroupShuffleSplit, StratifiedKFold, cross_val_predict, train_test_split
+from sklearn.model_selection import (
+    GroupShuffleSplit,
+    StratifiedGroupKFold,
+    StratifiedKFold,
+    cross_val_predict,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -40,10 +46,11 @@ from .neo4j_export import export_predictions_dataframe
 
 logger = get_logger(__name__)
 
-IDENTIFIER_TOKENS = (
-    "node_id", "node_ref", "cid", "protein_id", "accession", "compound_id", "target_id",
-    "smiles", "inchi", "xref", "identifier",
-)
+IDENTIFIER_TOKENS = {
+    "id", "cid", "sid", "aid", "node_id", "node_ref", "protein_id",
+    "accession", "compound_id", "target_id", "smiles", "inchi", "inchikey",
+    "xref", "identifier", "uri", "url", "pmid", "doi",
+}
 
 # These terms are direct evidence/outcome terms in the current PRING exports.
 # Using them gives a perfect-looking but invalid Stage 1 model, because the label
@@ -69,8 +76,11 @@ METADATA_COLUMNS = [
 
 
 def _is_identifier_like(col: str) -> bool:
-    lower = col.lower()
-    return any(tok in lower for tok in IDENTIFIER_TOKENS)
+    lower = str(col).strip().lower()
+    tokens = {token for token in re.split(r"[^a-z0-9]+", lower) if token}
+    if lower in IDENTIFIER_TOKENS or tokens & IDENTIFIER_TOKENS:
+        return True
+    return lower.endswith(("_node_id", "_node_ref", "_protein_id", "_compound_id", "_target_id"))
 
 
 def _is_leakage_like(col: str) -> bool:
@@ -288,29 +298,81 @@ def _read_candidate_rows(candidate_file: Path, max_rows: int) -> pd.DataFrame:
 
 
 def _split_indices(df: pd.DataFrame, y: pd.Series, args: argparse.Namespace):
-    """Return train/test indices, honoring a supplied shared split column first.
+    """Return disjoint train/validation/test indices.
 
-    Shared-split comparisons materialize `split`/`split_group`/`stage_use` into
-    the Stage 1 pair file before any implementation is run. Stage 1 only needs a
-    train/test split, so validation rows are intentionally included with train.
+    A supplied shared split is authoritative. If it has no validation partition,
+    a validation set is carved only from its training partition. Otherwise a
+    compound-grouped split is preferred so the same compound cannot cross
+    partitions.
     """
+    idx = np.arange(len(y))
     split_col = next((c for c in ["split", "data_split", "set", "partition", "stage_use"] if c in df.columns), None)
     if split_col:
         split = df[split_col].astype(str).str.lower().str.strip()
-        train_mask = split.isin(["train", "training", "valid", "validation", "val", "dev"])
+        train_mask = split.isin(["train", "training"])
+        valid_mask = split.isin(["valid", "validation", "val", "dev"])
         test_mask = split.isin(["test", "holdout", "heldout", "held_out"])
         train_idx = np.flatnonzero(train_mask.to_numpy())
+        valid_idx = np.flatnonzero(valid_mask.to_numpy())
         test_idx = np.flatnonzero(test_mask.to_numpy())
         if len(train_idx) > 0 and len(test_idx) > 0:
-            return train_idx, test_idx
+            if len(valid_idx) == 0:
+                if (
+                    args.group_split
+                    and args.group_column in df.columns
+                    and df.iloc[train_idx][args.group_column].nunique() > 1
+                ):
+                    inner = GroupShuffleSplit(
+                        n_splits=1,
+                        test_size=args.valid_size,
+                        random_state=args.seed + 1,
+                    )
+                    relative_train, relative_valid = next(
+                        inner.split(
+                            df.iloc[train_idx],
+                            y.iloc[train_idx],
+                            groups=df.iloc[train_idx][args.group_column].astype(str),
+                        )
+                    )
+                else:
+                    relative_train, relative_valid = train_test_split(
+                        np.arange(len(train_idx)),
+                        test_size=args.valid_size,
+                        stratify=y.iloc[train_idx] if y.iloc[train_idx].value_counts().min() >= 2 else None,
+                        random_state=args.seed,
+                    )
+                train_idx, valid_idx = train_idx[relative_train], train_idx[relative_valid]
+            return train_idx, valid_idx, test_idx
 
     if args.group_split and args.group_column in df.columns and df[args.group_column].nunique() > 1:
         groups = df[args.group_column].astype(str)
-        gss = GroupShuffleSplit(n_splits=1, test_size=args.test_size, random_state=args.seed)
-        return next(gss.split(df, y, groups=groups))
+        outer = GroupShuffleSplit(n_splits=1, test_size=args.test_size, random_state=args.seed)
+        development_idx, test_idx = next(outer.split(df, y, groups=groups))
+        inner = GroupShuffleSplit(n_splits=1, test_size=args.valid_size, random_state=args.seed + 1)
+        relative_train, relative_valid = next(
+            inner.split(
+                df.iloc[development_idx],
+                y.iloc[development_idx],
+                groups=groups.iloc[development_idx],
+            )
+        )
+        return development_idx[relative_train], development_idx[relative_valid], test_idx
+
     stratify = y if y.value_counts().min() >= 2 else None
-    idx = np.arange(len(y))
-    return train_test_split(idx, test_size=args.test_size, stratify=stratify, random_state=args.seed)
+    development_idx, test_idx = train_test_split(
+        idx,
+        test_size=args.test_size,
+        stratify=stratify,
+        random_state=args.seed,
+    )
+    development_y = y.iloc[development_idx]
+    relative_train, relative_valid = train_test_split(
+        np.arange(len(development_idx)),
+        test_size=args.valid_size,
+        stratify=development_y if development_y.value_counts().min() >= 2 else None,
+        random_state=args.seed + 1,
+    )
+    return development_idx[relative_train], development_idx[relative_valid], test_idx
 
 
 def _write_empty_summary(args, stage_dir, train_file, candidate_file, out_dir, report_dir, reason, excluded_columns) -> dict:
@@ -369,19 +431,21 @@ def run(args: argparse.Namespace) -> dict:
             return _write_empty_summary(args, stage_dir, train_file, candidate_file, out_dir, report_dir, "no_leakage_safe_features_found", excluded_columns)
 
         y = supervised["_label"].astype(int).reset_index(drop=True)
-        train_idx, test_idx = _split_indices(supervised.reset_index(drop=True), y, args)
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        train_idx, valid_idx, test_idx = _split_indices(supervised.reset_index(drop=True), y, args)
+        X_train, X_valid, X_test = X.iloc[train_idx], X.iloc[valid_idx], X.iloc[test_idx]
+        y_train, y_valid, y_test = y.iloc[train_idx], y.iloc[valid_idx], y.iloc[test_idx]
         model = _make_pipeline(args)
         model.fit(X_train, y_train)
+        valid_score = model.predict_proba(X_valid)[:, 1]
         test_score = model.predict_proba(X_test)[:, 1]
-        selected_threshold, metrics = optimize_binary_threshold(
-            y_test.to_numpy(),
-            test_score,
+        selected_threshold, validation_metrics = optimize_binary_threshold(
+            y_valid.to_numpy(),
+            valid_score,
             metric=args.threshold_selection,
             min_specificity=args.min_specificity,
             min_recall=args.min_recall,
         )
+        metrics = binary_metrics(y_test.to_numpy(), test_score, selected_threshold)
         operating_points = operating_point_metrics(
             y_test.to_numpy(),
             test_score,
@@ -415,22 +479,35 @@ def run(args: argparse.Namespace) -> dict:
         )
         per_target_metrics_file = write_dataframe_if_not_empty(per_target, out_dir / "per_target_metrics.csv")
 
-        # Optional out-of-fold diagnostics on the supervised training set.
+        # Optional out-of-fold diagnostics are restricted to the training set.
         cv_metrics = None
-        if args.cv_folds and args.cv_folds >= 3 and y.value_counts().min() >= args.cv_folds:
-            cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
+        if args.cv_folds and args.cv_folds >= 3 and y_train.value_counts().min() >= args.cv_folds:
+            train_groups = supervised.iloc[train_idx][args.group_column].astype(str) if args.group_split and args.group_column in supervised.columns else None
+            if train_groups is not None and train_groups.nunique() >= args.cv_folds:
+                cv = StratifiedGroupKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
+            else:
+                cv = StratifiedKFold(n_splits=args.cv_folds, shuffle=True, random_state=args.seed)
             cv_model = _make_pipeline(args)
-            cv_score = cross_val_predict(cv_model, X, y, cv=cv, method="predict_proba", n_jobs=1)[:, 1]
+            cv_score = cross_val_predict(
+                cv_model,
+                X_train,
+                y_train,
+                cv=cv,
+                groups=train_groups,
+                method="predict_proba",
+                n_jobs=1,
+            )[:, 1]
             _, cv_metrics = optimize_binary_threshold(
-                y.to_numpy(),
+                y_train.to_numpy(),
                 cv_score,
                 metric=args.threshold_selection,
                 min_specificity=args.min_specificity,
                 min_recall=args.min_recall,
             )
-            cv_pred = supervised[METADATA_COLUMNS].copy() if all(c in supervised.columns for c in METADATA_COLUMNS) else supervised[[c for c in METADATA_COLUMNS if c in supervised.columns]].copy()
+            cv_source = supervised.iloc[train_idx].reset_index(drop=True)
+            cv_pred = cv_source[METADATA_COLUMNS].copy() if all(c in cv_source.columns for c in METADATA_COLUMNS) else cv_source[[c for c in METADATA_COLUMNS if c in cv_source.columns]].copy()
             cv_pred["score"] = cv_score
-            cv_pred["label"] = y.to_numpy()
+            cv_pred["label"] = y_train.to_numpy()
             cv_pred["model"] = f"stage1_tabular_{args.classifier}_cv"
             cv_pred["stage"] = "Stage 1 — Neo4j GDS/tabular baseline"
             cv_pred.to_csv(out_dir / "eval_predictions.csv", index=False)
@@ -477,6 +554,9 @@ def run(args: argparse.Namespace) -> dict:
             "training_file": str(train_file),
             "candidate_file": str(candidate_file) if candidate_file else None,
             "training_rows_used": int(len(supervised)),
+            "train_rows": int(len(train_idx)),
+            "validation_rows": int(len(valid_idx)),
+            "test_rows": int(len(test_idx)),
             "class_distribution": class_distribution(y.to_numpy()),
             "negative_source_summary": negative_source_summary(supervised, "_label"),
             "feature_count": int(len(feature_columns)),
@@ -488,6 +568,7 @@ def run(args: argparse.Namespace) -> dict:
             "group_split": bool(args.group_split),
             "group_column": args.group_column if args.group_split else None,
             "selected_threshold": float(selected_threshold),
+            "threshold_selection_partition": "validation",
             "threshold_selection": args.threshold_selection,
             "prediction_scope": args.prediction_scope,
             "prediction_rows_written": int(len(preds_to_write)),
@@ -498,6 +579,7 @@ def run(args: argparse.Namespace) -> dict:
             "per_target_metrics_file": per_target_metrics_file,
             "feature_importance_file": feature_importance_file,
             "metrics": metrics,
+            "validation_metrics": validation_metrics,
             "operating_points": operating_points,
             "balanced_diagnostic_metrics": balanced_metrics,
             "per_target_metrics": per_target.to_dict(orient="records") if per_target_metrics_file else [],
@@ -519,12 +601,16 @@ def run(args: argparse.Namespace) -> dict:
 def render_markdown(summary: dict) -> str:
     lines = ["# Stage 1 modeling summary", ""]
     for key, value in summary.items():
-        if key in {"metrics", "cv_metrics", "neo4j_export"}:
+        if key in {"metrics", "validation_metrics", "cv_metrics", "neo4j_export"}:
             continue
         lines.append(f"- **{key}**: `{value}`")
     lines.append("\n## Metrics")
     for k, v in summary.get("metrics", {}).items():
         lines.append(f"- **{k}**: `{v}`")
+    if summary.get("validation_metrics"):
+        lines.append("\n## Validation metrics")
+        for k, v in summary.get("validation_metrics", {}).items():
+            lines.append(f"- **{k}**: `{v}`")
     if summary.get("cv_metrics"):
         lines.append("\n## Cross-validation metrics")
         for k, v in summary.get("cv_metrics", {}).items():
@@ -557,6 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rdkit-fingerprint-bits", type=int, default=0, help="Optional Morgan fingerprint bit count. 0 adds descriptors only.")
     p.add_argument("--classifier", choices=["random_forest", "extra_trees", "hist_gradient_boosting", "logistic_regression"], default="random_forest")
     p.add_argument("--test-size", type=float, default=0.25)
+    p.add_argument("--valid-size", type=float, default=0.20, help="Validation fraction of the non-test/development partition.")
     p.add_argument("--group-split", action="store_true", default=True)
     p.add_argument("--no-group-split", dest="group_split", action="store_false")
     p.add_argument("--group-column", default="compound_node_id")

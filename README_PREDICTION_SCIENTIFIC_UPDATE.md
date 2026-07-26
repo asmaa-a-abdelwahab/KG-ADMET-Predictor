@@ -144,7 +144,7 @@ Then run:
 powershell -ExecutionPolicy Bypass `
   -File "A:\Patches\PRING_Prediction_Scientific_Report_Update\apply_patch.ps1" `
   -PatchRoot "A:\Patches\PRING_Prediction_Scientific_Report_Update" `
-  -ProjectRoot "A:\Repositories\KG-ADMET-Predictor"
+  -ProjectRoot "A:\Repositories\PRING-APP"
 ```
 
 Merge `prediction_scientific.env.snippet` into the existing `.env`. Do not replace the complete `.env`.
@@ -176,7 +176,7 @@ The script creates a timestamped backup of the finalized frame before changing i
 ## Rebuild
 
 ```powershell
-cd A:\Repositories\KG-ADMET-Predictor
+cd A:\Repositories\PRING-APP
 
 docker compose stop predictor streamlit
 docker compose rm -f predictor streamlit
@@ -217,7 +217,7 @@ Expected parity status:
 Monitor memory during the first validation/live request:
 
 ```powershell
-docker stats kg-admet-predictor kg-admet-neo4j
+docker stats pring-app-predictor pring-app-neo4j
 ```
 
 Start with one compound and one CYP target.

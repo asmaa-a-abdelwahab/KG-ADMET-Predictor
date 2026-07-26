@@ -27,7 +27,7 @@ def test_precomputed_active_and_inactive_predictions() -> None:
     finally:
         service.close()
     assert output["successful_pairs"] >= 2
-    assert output["model_status"]["precomputed_score_lookup"] is True
+    assert output["model_status"]["validated_reference_store"]["available"] is True
     assert any(p["prediction"]["predicted_label"] == 1 for p in output["predictions"])
     assert any(p["prediction"]["predicted_label"] == 0 for p in output["predictions"])
     for prediction in output["predictions"]:

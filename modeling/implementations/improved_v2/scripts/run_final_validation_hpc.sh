@@ -2,15 +2,15 @@
 #SBATCH --job-name=final_validation
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=120G
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/final_validation_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/final_validation_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/final_validation_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/final_validation_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
 fi
 
 set -euo pipefail
-PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/KG-ADMET-Predictor}"
+PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/PRING-APP}"
 cd "$PROJECT_DIR"
 OUT_ROOT="${MODEL_OUTPUT_DIR:-$PROJECT_DIR/models_all_stages_improved_v2}"
 REPORT_ROOT="${MODEL_REPORT_DIR:-$PROJECT_DIR/reports/all_stages_improved_v2}"

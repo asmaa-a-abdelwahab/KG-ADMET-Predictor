@@ -6,8 +6,8 @@
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_gpu_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage3_sampled_gpu_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/stage3_sampled_gpu_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/stage3_sampled_gpu_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -16,14 +16,14 @@ fi
 set -euo pipefail
 
 echo "============================================================"
-echo "PRING / KG-ADMET Stage 3 Sampled GPU Job - NO NEO4J"
+echo "PRING-APP Stage 3 Sampled GPU Job - NO NEO4J"
 echo "Job ID: ${SLURM_JOB_ID:-unknown}"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "============================================================"
 
-PROJECT_DIR="/home/asmaaali/KG-ADMET-Predictor"
-DEFAULT_MODELING_DIR="/home/asmaaali/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
+PROJECT_DIR="/home/asmaaali/PRING-APP"
+DEFAULT_MODELING_DIR="/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
 DEFAULT_OUTPUT_DIR="${PROJECT_DIR}/models_stage3_sampled_gpu"
 DEFAULT_REPORT_DIR="${PROJECT_DIR}/reports/stage3_sampled_gpu"
 

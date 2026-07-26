@@ -169,7 +169,7 @@ The code also contains a fallback logger, so a missing `loguru` package should n
 The Stage 1 notebook now uses this default standalone Stage 1 export path:
 
 ```python
-MODEL_INPUT = Path("A:/Repositories/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling/stage1_neo4j_gds_baselines")
+MODEL_INPUT = Path("A:/Repositories/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling/stage1_neo4j_gds_baselines")
 OUTPUT_DIR = Path("/models/notebook_stage1_tabular")
 REPORT_DIR = Path("/reports/modeling")
 ```

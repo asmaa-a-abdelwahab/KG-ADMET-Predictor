@@ -27,7 +27,7 @@ Get-Item `
   -ErrorAction SilentlyContinue
 
 Write-Host "`n=== Predictor state ==="
-docker inspect kg-admet-predictor --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}} Status={{.State.Status}} RestartCount={{.RestartCount}}"
+docker inspect pring-app-predictor --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}} Status={{.State.Status}} RestartCount={{.RestartCount}}"
 
 Write-Host "`n=== Recent predictor logs ==="
 docker compose logs --tail=150 predictor

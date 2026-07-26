@@ -102,6 +102,12 @@ def _render_summary(payload: dict[str, Any]) -> None:
         st.warning("A direct interaction assertion already exists. Treat this result as model rediscovery/validation, not a novel missing interaction.")
     elif status == "known_interaction_not_rediscovered":
         st.error("The graph contains a direct assertion, but the model did not recover it at the locked threshold. Review mapping, labels and assay context.")
+    elif status == "prediction_conflicts_with_known_inactive":
+        st.error("The prediction conflicts with a curated inactive assertion. Do not present it as a novel interaction without adjudicating the assay evidence.")
+    elif status == "known_inactive_consistent":
+        st.info("The model result is consistent with curated inactive evidence. This is not proof of biological inactivity.")
+    elif status == "known_evidence_conflict":
+        st.error("The graph contains conflicting curated evidence. This pair is not a clean positive or negative label and requires adjudication.")
     elif status == "novel_predicted_interaction":
         st.success("No direct assertion was found and the calibrated probability exceeds the selected threshold. This is a candidate for validation.")
     else:
@@ -197,7 +203,11 @@ def _render_explainability(payload: dict[str, Any]) -> None:
         st.dataframe(domain, use_container_width=True, hide_index=True)
 
     with st.expander("Model-level validation metrics", expanded=False):
-        st.caption("These are frozen-test metrics and are not pair-specific correctness guarantees.")
+        provenance_audit = item.get("validation", {}).get("reference_provenance_audit", {}) or {}
+        if provenance_audit.get("scientific_status") == "diagnostic_only":
+            st.error(provenance_audit.get("warning", "These metrics are diagnostic only and are not publication-valid."))
+        else:
+            st.caption("These are frozen-test metrics and are not pair-specific correctness guarantees.")
         global_metrics = item.get("validation", {}).get("global_test_metrics", {}) or {}
         st.dataframe(pd.DataFrame([global_metrics]), use_container_width=True, hide_index=True)
         target_metrics = item.get("validation", {}).get("target_specific_metrics")

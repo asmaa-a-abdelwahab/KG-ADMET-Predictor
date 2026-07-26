@@ -1,24 +1,24 @@
-name: kg-admet-pring
+name: pring-app
 
 services:
   neo4j:
     build:
       context: ./neo4j
-    container_name: kg-admet-neo4j
+    container_name: pring-app-neo4j
     restart: unless-stopped
     ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "${PRING_BIND_ADDRESS:-127.0.0.1}:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${PRING_BIND_ADDRESS:-127.0.0.1}:${NEO4J_BOLT_PORT:-7687}:7687"
     environment:
       NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-cyp450kg}"
       # Install both APOC and Graph Data Science
       NEO4J_PLUGINS: '["apoc","graph-data-science"]'
       # Allow APOC and GDS procedures
-      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*"
       NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
       # APOC file import/export
-      NEO4J_apoc_export_file_enabled: "true"
-      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_export_file_enabled: "${NEO4J_APOC_FILE_EXPORT_ENABLED:-false}"
+      NEO4J_apoc_import_file_enabled: "${NEO4J_APOC_FILE_IMPORT_ENABLED:-false}"
       NEO4J_apoc_import_file_use__neo4j__config: "true"
       # Memory
       NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL:-2G}"
@@ -45,14 +45,14 @@ services:
     build:
       context: .
       dockerfile: ./neo4j/Dockerfile.pring-loader
-    container_name: kg-admet-pring-loader
+    container_name: pring-app-loader
     profiles: ["load"]
     depends_on:
       neo4j:
         condition: service_healthy
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       PRING_SCHEMA_DOT: "${PRING_SCHEMA_DOT:-}"
       NEO4J_URI: "bolt://neo4j:7687"
@@ -74,14 +74,14 @@ services:
     build:
       context: .
       dockerfile: ./modeling/Dockerfile
-    container_name: kg-admet-modeling
+    container_name: pring-app-modeling
     profiles: ["train"]
     depends_on:
       neo4j:
         condition: service_healthy
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
       MODEL_REPORT_DIR: "${MODEL_REPORT_DIR:-/reports/modeling}"
@@ -107,19 +107,19 @@ services:
     stop_grace_period: 30s
     build:
       context: .
-      dockerfile: ./modeling/Dockerfile
+      dockerfile: ./modeling/Dockerfile.predictor
       args:
         TORCH_VERSION: "${TORCH_VERSION:-2.5.1}"
         TORCH_GEOMETRIC_VERSION: "${TORCH_GEOMETRIC_VERSION:-2.6.1}"
         PYTORCH_INDEX_URL: "${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
         PYG_WHEEL_URL: "${PYG_WHEEL_URL:-https://data.pyg.org/whl/torch-2.5.1+cpu.html}"
-    container_name: kg-admet-predictor
+    container_name: pring-app-predictor
     restart: unless-stopped
     depends_on:
       neo4j:
         condition: service_healthy
     ports:
-      - "${PREDICTOR_PORT:-8000}:8000"
+      - "${PRING_BIND_ADDRESS:-127.0.0.1}:${PREDICTOR_PORT:-8000}:8000"
     environment:
       PRODUCTION_MODEL_DIR: "/models/production"
       PRECOMPUTED_SCORE_FRAME: "/results/production/finalized_training_frame.csv"
@@ -136,6 +136,11 @@ services:
       PREDICTION_TARGET_BACKGROUND_MIN_ROWS: "${PREDICTION_TARGET_BACKGROUND_MIN_ROWS:-20}"
       PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT: "${PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT:-0.01}"
       PRING_GRAPH_VERSION: "${PRING_GRAPH_VERSION:-unknown_graph_snapshot}"
+      PREDICTION_ALLOW_STALE_CACHE: "${PREDICTION_ALLOW_STALE_CACHE:-false}"
+      PREDICTION_ALLOW_RUNTIME_MISMATCH: "${PREDICTION_ALLOW_RUNTIME_MISMATCH:-false}"
+      PREDICTION_REQUIRE_VERIFIED_ARTIFACTS: "${PREDICTION_REQUIRE_VERIFIED_ARTIFACTS:-false}"
+      PREDICTION_API_KEY: "${PREDICTION_API_KEY:-}"
+      PREDICTION_DEBUG_ERRORS: "${PREDICTION_DEBUG_ERRORS:-false}"
       PREDICTION_DEVICE: "${PREDICTION_DEVICE:-cpu}"
       # Keep CPU allocation and glibc arenas bounded to reduce peak RSS while
       # loading the shared Stage 3 graph and both checkpoints.
@@ -180,7 +185,7 @@ services:
     build:
       context: .
       dockerfile: ./streamlit/Dockerfile
-    container_name: kg-admet-streamlit
+    container_name: pring-app-streamlit
     restart: unless-stopped
     depends_on:
       neo4j:
@@ -188,10 +193,10 @@ services:
       predictor:
         condition: service_healthy
     ports:
-      - "${STREAMLIT_PORT:-8501}:8501"
+      - "${PRING_BIND_ADDRESS:-127.0.0.1}:${STREAMLIT_PORT:-8501}:8501"
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
       EDA_REPORT_DIR: "${EDA_REPORT_DIR:-/reports}"
@@ -200,6 +205,7 @@ services:
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
       NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
       PREDICTION_API_URL: "http://predictor:8000"
+      PREDICTION_API_KEY: "${PREDICTION_API_KEY:-}"
       PREDICTION_TIMEOUT_SECONDS: "${PREDICTION_TIMEOUT_SECONDS:-1800}"
     volumes:
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;

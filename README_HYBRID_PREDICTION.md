@@ -135,7 +135,7 @@ This lowers retained memory but makes every new cache miss reload the graph.
 ## Rebuild
 
 ```powershell
-cd A:\Repositories\KG-ADMET-Predictor
+cd A:\Repositories\PRING-APP
 
 docker compose stop predictor streamlit
 docker compose rm -f predictor streamlit

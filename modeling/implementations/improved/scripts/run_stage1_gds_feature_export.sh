@@ -2,8 +2,8 @@
 #SBATCH --job-name=stage1_gds_baseline
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage1_gds_baseline_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage1_gds_baseline_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/stage1_gds_baseline_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/stage1_gds_baseline_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -12,14 +12,14 @@ fi
 set -euo pipefail
 
 echo "============================================================"
-echo "PRING / KG-ADMET Stage 1 GDS Structural Baseline"
+echo "PRING-APP Stage 1 GDS Structural Baseline"
 echo "Job ID: ${SLURM_JOB_ID:-unknown}"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "============================================================"
 
-PROJECT_DIR="/home/asmaaali/KG-ADMET-Predictor"
-DEFAULT_MODELING_DIR="/home/asmaaali/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
+PROJECT_DIR="/home/asmaaali/PRING-APP"
+DEFAULT_MODELING_DIR="/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
 
 cd "$PROJECT_DIR"
 

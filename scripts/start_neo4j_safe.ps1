@@ -9,6 +9,6 @@ Start-Sleep -Seconds 5
 Write-Host "Current containers:"
 docker compose ps
 Write-Host "Neo4j logs:"
-docker logs kg-admet-neo4j --tail 200
+docker logs pring-app-neo4j --tail 200
 Write-Host "If Neo4j is running, wait until it becomes healthy, then run:"
 Write-Host "docker compose --profile load up --build pring-loader"

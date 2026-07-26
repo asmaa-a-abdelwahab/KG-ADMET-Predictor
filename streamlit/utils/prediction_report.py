@@ -48,6 +48,9 @@ def _status_label(status: str) -> str:
     return {
         "known_interaction_rediscovered": "Known / rediscovered",
         "known_interaction_not_rediscovered": "Known evidence, model disagreement",
+        "prediction_conflicts_with_known_inactive": "Conflicts with curated inactive evidence",
+        "known_inactive_consistent": "Consistent with curated inactive evidence",
+        "known_evidence_conflict": "Conflicting curated evidence",
         "novel_predicted_interaction": "Novel predicted interaction",
         "interaction_not_predicted": "Interaction not predicted",
     }.get(status, status.replace("_", " ").title())
@@ -56,7 +59,11 @@ def _status_label(status: str) -> str:
 def _status_class(status: str) -> str:
     if status == "known_interaction_rediscovered":
         return "known"
-    if status == "known_interaction_not_rediscovered":
+    if status in {
+        "known_interaction_not_rediscovered",
+        "prediction_conflicts_with_known_inactive",
+        "known_evidence_conflict",
+    }:
         return "warning-status"
     if status == "novel_predicted_interaction":
         return "predicted"
@@ -160,6 +167,8 @@ def generate_prediction_report_html(payload: dict[str, Any]) -> str:
     provenance = context.get("model_provenance", {}) or {}
     validation = context.get("global_validation_metrics", {}) or {}
     parity = context.get("live_inference_parity", {}) or {}
+    reference_audit = provenance.get("reference_provenance_audit", {}) or {}
+    diagnostic_validation = reference_audit.get("scientific_status") == "diagnostic_only"
 
     summary_rows = _executive_summary_rows(predictions)
     status_counts = context.get("result_status_counts", {}) or {}
@@ -334,6 +343,8 @@ def generate_prediction_report_html(payload: dict[str, Any]) -> str:
         {"field": "Graph snapshot", "value": provenance.get("graph_version")},
         {"field": "Calibration", "value": provenance.get("calibration")},
         {"field": "Threshold selection", "value": provenance.get("threshold_selection")},
+        {"field": "Publication-valid", "value": False if diagnostic_validation else provenance.get("publishable")},
+        {"field": "Reference scientific status", "value": reference_audit.get("scientific_status")},
         {"field": "Component scores", "value": ", ".join(provenance.get("score_columns", []) or [])},
         {"field": "Live parity status", "value": parity.get("status", "not run")},
         {"field": "Live parity sample size", "value": parity.get("sample_size")},
@@ -341,6 +352,14 @@ def generate_prediction_report_html(payload: dict[str, Any]) -> str:
     ]
     errors = payload.get("errors", []) or []
     error_html = _table(errors, [("compound", "Compound"), ("target", "Target"), ("error", "Reason")]) if errors else ""
+    validation_heading = "Diagnostic validation metrics" if diagnostic_validation else "Frozen-test validation"
+    validation_qualification = (
+        f'<div class="warning"><strong>Scientific-validity warning:</strong> '
+        f'{_h(reference_audit.get("warning"))}</div>'
+        if diagnostic_validation else
+        "<p>These are model-level validation metrics and are reported once. "
+        "They are not pair-specific correctness guarantees.</p>"
+    )
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -365,8 +384,8 @@ table{{border-collapse:collapse;width:100%;margin:12px 0 22px}} th,td{{border:1p
 <h2>Model and data provenance</h2>
 {_table(provenance_rows, [('field','Field'),('value','Value')])}
 <p><strong>Score sources used in this report:</strong> {_h(json.dumps(source_counts, sort_keys=True))}</p>
-<h2>Frozen-test validation</h2>
-<p>These are model-level validation metrics and are reported once. They are not pair-specific correctness guarantees.</p>
+<h2>{validation_heading}</h2>
+{validation_qualification}
 {_table(validation_rows, [('metric','Metric'),('value','Value')])}
 {''.join(sections)}
 {('<h2>Pairs not scored</h2>'+error_html) if errors else ''}

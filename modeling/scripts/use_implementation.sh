@@ -24,28 +24,9 @@ if [ ! -d "$IMPL_DIR" ]; then
   exit 2
 fi
 
-# These entries make ./modeling behave like the selected implementation for
-# editable installs and interactive python -m pring_modeling... commands.
-items=(
-  pyproject.toml
-  requirements.txt
-  requirements-pyg-cu124.txt
-  Dockerfile
-  node_embeddings.py
-  pring_modeling
-  stages
-  notebooks
-)
-
-for item in "${items[@]}"; do
-  target="$MODEL_ROOT/$item"
-  source="$IMPL_DIR/$item"
-  if [ -e "$source" ]; then
-    rm -rf "$target"
-    ln -s "implementations/$IMPL/$item" "$target"
-  fi
-done
-
 echo "$IMPL" > "$MODEL_ROOT/.active_implementation"
-echo "Active PRING modeling implementation: $IMPL"
+echo "Selected PRING modeling implementation: $IMPL"
 echo "Implementation directory: $IMPL_DIR"
+echo "No source files were replaced. Wrappers run the selected implementation through PYTHONPATH."
+echo "For an interactive shell, run:"
+printf "  export PYTHONPATH='%s'\${PYTHONPATH:+:\$PYTHONPATH}\n" "$IMPL_DIR"

@@ -24,7 +24,7 @@ class FakeLiveScorer:
     def status(self):
         return {"ready": True, "components": {}, "shared_graph": {"loaded": False}}
 
-    def score_many(self, pairs, _provider):
+    def score_many(self, pairs, _provider=None, **_kwargs):
         self.calls += 1
         output = {}
         for pair in pairs:
@@ -96,6 +96,7 @@ def _make_bundle(model_dir: Path) -> None:
 def test_precomputed_first_live_fallback_and_persistence(tmp_path, monkeypatch):
     model_dir = tmp_path / "models" / "production"
     score_file = tmp_path / "results" / "production" / "finalized_training_frame.csv"
+    cache_file = tmp_path / "results" / "production" / "production_prediction_cache.csv"
     _make_bundle(model_dir)
     score_file.parent.mkdir(parents=True)
     pd.DataFrame(
@@ -115,11 +116,14 @@ def test_precomputed_first_live_fallback_and_persistence(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PRODUCTION_MODEL_DIR", str(model_dir))
     monkeypatch.setenv("PRECOMPUTED_SCORE_FRAME", str(score_file))
+    monkeypatch.setenv("PREDICTION_CACHE_FRAME", str(cache_file))
     monkeypatch.setenv("PREDICTION_SCORE_MODE", "auto")
     monkeypatch.setenv("PREDICTION_PERSIST_NEW_SCORES", "true")
     monkeypatch.setenv("PREDICTION_REQUIRE_CACHE_WRITE", "true")
     monkeypatch.setenv("PREDICTION_CACHE_BACKUP", "false")
     monkeypatch.setenv("PREDICTION_MAX_PAIRS", "9")
+    monkeypatch.setenv("PREDICTION_PARITY_REQUIRED", "false")
+    monkeypatch.setenv("PRING_GRAPH_VERSION", "graph-test-v1")
 
     import pring_modeling.prediction_service as module
 
@@ -134,20 +138,21 @@ def test_precomputed_first_live_fallback_and_persistence(tmp_path, monkeypatch):
     assert fake_live.calls == 1
 
     by_cid = {item["pair"]["cid"]: item for item in payload["predictions"]}
-    assert by_cid["1"]["model"]["score_source"] == "precomputed_validated_model_outputs"
+    assert by_cid["1"]["model"]["score_source"] == "validated_precomputed_record"
     assert by_cid["2"]["model"]["score_source"] == "live_component_inference"
     assert by_cid["2"]["prediction_cache"]["status"] == "written"
 
-    updated = pd.read_csv(score_file)
-    assert len(updated) == 2
-    cached = updated.loc[updated["compound_key"] == "Compound|cid=2"].iloc[0]
+    assert len(pd.read_csv(score_file)) == 1
+    updated_cache = pd.read_csv(cache_file)
+    assert len(updated_cache) == 1
+    cached = updated_cache.loc[updated_cache["compound_key"] == "Compound|cid=2"].iloc[0]
     assert cached["record_type"] == "production_prediction_cache"
     assert str(cached["exclude_from_training"]).lower() == "true"
     assert cached["final_split"] == "production_inference"
-    assert pd.isna(cached["label"])
+    assert pd.isna(cached["observed_label"])
 
     second = service.predict_many(["CID 2"], ["P1"])
     assert second["successful_pairs"] == 1
     assert second["live_predictions_generated"] == 0
     assert fake_live.calls == 1
-    assert second["predictions"][0]["model"]["score_source"] == "live_component_inference_cached"
+    assert second["predictions"][0]["model"]["score_source"] == "production_prediction_cache"

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +27,7 @@ def _row_to_payload(row: pd.Series, model_name: str) -> dict[str, Any] | None:
         score_f = float(score)
     except Exception:
         return None
-    return {
+    payload = {
         "compound_node_ref": compound_ref,
         "protein_node_ref": protein_ref,
         "cid": cid,
@@ -35,7 +38,37 @@ def _row_to_payload(row: pd.Series, model_name: str) -> dict[str, Any] | None:
         "model": str(row.get("model", model_name)),
         "stage": str(row.get("stage", "")),
         "source": str(row.get("source", "pring_modeling")),
+        "model_version": str(row.get("model_version") or os.getenv("PRING_MODEL_VERSION", "unknown_model_version")),
+        "graph_version": str(row.get("graph_version") or os.getenv("PRING_GRAPH_VERSION", "unknown_graph_snapshot")),
+        "dataset_id": str(row.get("dataset_id") or os.getenv("PRING_DATASET_ID", "unknown_dataset")),
+        "label_policy_id": str(row.get("label_policy_id") or os.getenv("PRING_LABEL_POLICY_ID", "unknown_label_policy")),
+        "feature_schema_id": str(row.get("feature_schema_id") or os.getenv("PRING_FEATURE_SCHEMA_ID", "unknown_feature_schema")),
+        "split_registry_id": str(row.get("split_registry_id") or os.getenv("PRING_SPLIT_REGISTRY_ID", "production_inference")),
+        "exclude_from_training": True,
+        "created_at_utc": str(
+            row.get("created_at_utc") or datetime.now(timezone.utc).isoformat()
+        ),
     }
+    identity = {
+        key: payload[key]
+        for key in (
+            "compound_node_ref",
+            "protein_node_ref",
+            "cid",
+            "protein_id",
+            "model",
+            "model_version",
+            "graph_version",
+            "dataset_id",
+            "label_policy_id",
+            "feature_schema_id",
+            "split_registry_id",
+        )
+    }
+    payload["prediction_id"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 def _chunks(rows: list[dict[str, Any]], size: int):
@@ -46,7 +79,7 @@ def _chunks(rows: list[dict[str, Any]], size: int):
 def export_predictions_dataframe(predictions: pd.DataFrame, *, model_name: str, max_rows: int = 50000, batch_size: int | None = None) -> dict[str, Any]:
     """Export prediction rows back to Neo4j as PREDICTED_INTERACTION relationships.
 
-    The export is idempotent for the same model/compound/protein reference and
+    The export is idempotent for the same versioned model/graph/dataset identity and
     writes only rows that can be linked through cid/protein_id or PRING node_ref.
     """
     from neo4j import GraphDatabase
@@ -74,12 +107,23 @@ def export_predictions_dataframe(predictions: pd.DataFrame, *, model_name: str, 
     MATCH (p:Protein)
     WHERE (row.protein_id <> '' AND (toString(p.protein_id) = row.protein_id OR toString(p.accession) = row.protein_id))
        OR (row.protein_node_ref <> '' AND p.node_ref IS NOT NULL AND p.node_ref = row.protein_node_ref)
-    MERGE (c)-[r:PREDICTED_INTERACTION {model: row.model, compound_node_ref: row.compound_node_ref, protein_node_ref: row.protein_node_ref}]->(p)
+    MERGE (c)-[r:PREDICTED_INTERACTION {prediction_id: row.prediction_id}]->(p)
     SET r.score = row.score,
         r.raw_score = row.raw_score,
         r.predicted_label = row.predicted_label,
         r.stage = row.stage,
         r.source = row.source,
+        r.model = row.model,
+        r.model_version = row.model_version,
+        r.graph_version = row.graph_version,
+        r.dataset_id = row.dataset_id,
+        r.label_policy_id = row.label_policy_id,
+        r.feature_schema_id = row.feature_schema_id,
+        r.split_registry_id = row.split_registry_id,
+        r.exclude_from_training = true,
+        r.created_at_utc = row.created_at_utc,
+        r.compound_node_ref = row.compound_node_ref,
+        r.protein_node_ref = row.protein_node_ref,
         r.updated_at = datetime()
     RETURN count(r) AS written
     """

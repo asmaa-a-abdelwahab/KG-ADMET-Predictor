@@ -3,8 +3,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:1
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/all_impl_same_splits_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/all_impl_same_splits_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/all_impl_same_splits_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/all_impl_same_splits_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -12,9 +12,9 @@ fi
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/KG-ADMET-Predictor}"
+PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/PRING-APP}"
 MODEL_ROOT="${MODEL_ROOT:-$PROJECT_DIR/modeling}"
-BASE_MODELING_DIR="${PRING_BASE_MODELING_DIR:-${PRING_RUN_DIR:-/home/asmaaali/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling}}"
+BASE_MODELING_DIR="${PRING_BASE_MODELING_DIR:-${PRING_RUN_DIR:-/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling}}"
 RUN_ID="${MODEL_SHARED_SPLIT_RUN_ID:-shared_seed_${MODEL_SHARED_SPLIT_SEED:-42}_${MODEL_SHARED_SPLIT_STRATEGY:-compound}}"
 SHARED_ROOT="${MODEL_SHARED_SPLIT_ROOT:-$PROJECT_DIR/shared_splits/$RUN_ID}"
 PREPARED_MODELING_DIR="${MODEL_SHARED_PREPARED_DIR:-$SHARED_ROOT/modeling_prepared}"
@@ -62,9 +62,9 @@ printf 'Resolved Stage 3 device: %s\n' "$MODEL_STAGE3_DEVICE"
 
 # Use improved_v2 for shared split preparation because it contains the newest neutral helper.
 bash "$MODEL_ROOT/scripts/use_implementation.sh" improved_v2
-export MODELING_PACKAGE_DIR="$MODEL_ROOT"
-export PYTHONPATH="$MODEL_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-python -m pip install -e "$MODEL_ROOT"
+export MODELING_PACKAGE_DIR="$MODEL_ROOT/implementations/improved_v2"
+export PYTHONPATH="$MODELING_PACKAGE_DIR${PYTHONPATH:+:$PYTHONPATH}"
+python -m pip install -e "$MODELING_PACKAGE_DIR"
 
 if [ "${MODEL_RECREATE_SHARED_SPLIT:-true}" = "true" ] || [ ! -f "$SHARED_ROOT/split_manifest.csv" ]; then
   echo "Creating/materializing shared split manifest..."
@@ -93,8 +93,8 @@ for impl in $IMPLEMENTATIONS; do
   bash "$MODEL_ROOT/scripts/use_implementation.sh" "$impl"
   export MODEL_IMPL="$impl"
   export MODEL_IMPLEMENTATION="$impl"
-  export MODELING_PACKAGE_DIR="$MODEL_ROOT"
-  export PYTHONPATH="$MODEL_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+  export MODELING_PACKAGE_DIR="$MODEL_ROOT/implementations/$impl"
+  export PYTHONPATH="$MODELING_PACKAGE_DIR${PYTHONPATH:+:$PYTHONPATH}"
   export PRING_RUN_DIR="$PREPARED_MODELING_DIR"
   export MODEL_OUTPUT_DIR="$OUTPUT_PARENT/$impl"
   export MODEL_REPORT_DIR="$REPORT_PARENT/$impl"
@@ -112,8 +112,8 @@ printf '============================================================\n'
 bash "$MODEL_ROOT/scripts/use_implementation.sh" improved_v2
 export MODEL_IMPL="improved_v2"
 export MODEL_IMPLEMENTATION="improved_v2"
-export MODELING_PACKAGE_DIR="$MODEL_ROOT"
-export PYTHONPATH="$MODEL_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export MODELING_PACKAGE_DIR="$MODEL_ROOT/implementations/improved_v2"
+export PYTHONPATH="$MODELING_PACKAGE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 python -m pring_modeling.cross_implementation_compare \
   --outputs-root "$OUTPUT_PARENT" \

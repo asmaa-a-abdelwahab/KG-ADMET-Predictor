@@ -180,7 +180,7 @@ def _score_col(df: pd.DataFrame) -> str | None:
 
 
 def _split_col(df: pd.DataFrame) -> str | None:
-    return _first_existing(df, ["split", "split_group", "stage_use", "data_split", "fold"])
+    return _first_existing(df, ["split", "data_split", "set", "partition"])
 
 
 def _scaffold_col(df: pd.DataFrame) -> str | None:
@@ -196,14 +196,26 @@ def _source_group_col(df: pd.DataFrame) -> str | None:
 
 def find_prediction_files(outputs_root: str | Path) -> list[Path]:
     root = Path(outputs_root)
-    found: list[Path] = []
-    for name in PREDICTION_FILENAMES:
-        found.extend(root.rglob(name))
+    priority = {name: index for index, name in enumerate(PREDICTION_FILENAMES)}
+    found = [
+        path
+        for name in PREDICTION_FILENAMES
+        for path in root.rglob(name)
+    ]
+    best_by_directory: dict[Path, Path] = {}
+    for path in found:
+        current = best_by_directory.get(path.parent.resolve())
+        if current is None or priority[path.name] < priority[current.name]:
+            best_by_directory[path.parent.resolve()] = path
     unique: list[Path] = []
     seen: set[Path] = set()
-    for p in found:
-        parent_text = str(p.parent)
-        if "ensemble_stacked" in parent_text or "finalized_v2" in parent_text or "/seed_" in parent_text:
+    for p in sorted(best_by_directory.values()):
+        parent_parts = {part.lower() for part in p.parent.parts}
+        if (
+            "ensemble_stacked" in parent_parts
+            or "finalized_v2" in parent_parts
+            or any(part.startswith("seed_") for part in parent_parts)
+        ):
             # Avoid training the final ensemble on a previous ensemble/finalized output unless explicitly passed.
             continue
         rp = p.resolve()
@@ -312,30 +324,74 @@ def _make_classifier(name: str, seed: int, n_jobs: int) -> Pipeline:
     ])
 
 
-def _infer_supplied_split(frame: pd.DataFrame) -> pd.Series | None:
+def _infer_supplied_split(frame: pd.DataFrame) -> tuple[pd.Series | None, dict[str, Any]]:
     split_cols = [c for c in frame.columns if c.startswith("split__")]
     if not split_cols:
-        return None
-    split = pd.Series(index=frame.index, dtype=object)
+        return None, {"split_columns": [], "conflicting_rows": 0, "unknown_rows": len(frame)}
+    normalized = pd.DataFrame(index=frame.index)
     for c in split_cols:
-        s = frame[c].astype(str).str.lower()
-        mapped = np.where(s.str.contains("test"), "test", np.where(s.str.contains("valid|val"), "valid", np.where(s.str.contains("train"), "train", None)))
-        split = split.combine_first(pd.Series(mapped, index=frame.index))
+        s = frame[c].astype(str).str.lower().str.strip()
+        normalized[c] = np.where(
+            s.str.contains("test|holdout"),
+            "test",
+            np.where(
+                s.str.contains("valid|val|dev"),
+                "valid",
+                np.where(s.str.contains("train"), "train", None),
+            ),
+        )
+    conflicting = normalized.nunique(axis=1, dropna=True) > 1
+    split = normalized.bfill(axis=1).iloc[:, 0]
+    split.loc[conflicting] = None
     if split.notna().sum() == 0:
-        return None
-    return split.fillna("unknown")
+        return None, {
+            "split_columns": split_cols,
+            "conflicting_rows": int(conflicting.sum()),
+            "unknown_rows": int(len(frame)),
+        }
+    return split.fillna("unknown"), {
+        "split_columns": split_cols,
+        "conflicting_rows": int(conflicting.sum()),
+        "unknown_rows": int(split.isna().sum() + split.eq("unknown").sum()),
+    }
 
 
 def _assign_split(frame: pd.DataFrame, args: argparse.Namespace, seed: int) -> tuple[pd.Series, dict[str, Any]]:
-    supplied = _infer_supplied_split(frame)
-    audit: dict[str, Any] = {"supplied_split_found": supplied is not None, "split_strategy": args.split_strategy}
-    if supplied is not None and {"train", "test"}.issubset(set(supplied.astype(str))):
+    supplied, supplied_audit = _infer_supplied_split(frame)
+    audit: dict[str, Any] = {
+        "supplied_split_found": supplied is not None,
+        "split_strategy": args.split_strategy,
+        **supplied_audit,
+    }
+    supplied_complete = supplied is not None and not supplied.astype(str).eq("unknown").any()
+    if supplied_complete and {"train", "test"}.issubset(set(supplied.astype(str))):
         split = supplied.copy()
         if "valid" not in set(split):
             train_idx = np.where(split == "train")[0]
-            y_train = frame.iloc[train_idx]["label"]
-            strat = y_train if y_train.value_counts().min() >= 2 else None
-            tr_sub, val_sub = train_test_split(train_idx, test_size=args.valid_size, stratify=strat, random_state=seed)
+            train_frame = frame.iloc[train_idx]
+            if train_frame["compound_key"].nunique() > 1:
+                inner = GroupShuffleSplit(
+                    n_splits=1,
+                    test_size=args.valid_size,
+                    random_state=seed,
+                )
+                tr_relative, val_relative = next(
+                    inner.split(
+                        train_frame,
+                        train_frame["label"],
+                        groups=train_frame["compound_key"],
+                    )
+                )
+                tr_sub, val_sub = train_idx[tr_relative], train_idx[val_relative]
+            else:
+                y_train = train_frame["label"]
+                strat = y_train if y_train.value_counts().min() >= 2 else None
+                tr_sub, val_sub = train_test_split(
+                    train_idx,
+                    test_size=args.valid_size,
+                    stratify=strat,
+                    random_state=seed,
+                )
             split.iloc[val_sub] = "valid"
             split.iloc[tr_sub] = "train"
             audit["valid_created_from_train"] = True
@@ -343,7 +399,10 @@ def _assign_split(frame: pd.DataFrame, args: argparse.Namespace, seed: int) -> t
         return split.reset_index(drop=True), audit
 
     if args.strict_leakage_free:
-        raise ValueError("Strict leakage-free mode requires supplied train/valid/test split columns in base prediction files.")
+        raise ValueError(
+            "Strict leakage-free mode requires complete, mutually consistent "
+            "train/valid/test split columns for every base prediction row."
+        )
 
     # Diagnostic fallback split. Prefer scaffold/source/compound grouping when available.
     split = pd.Series("train", index=frame.index, dtype=object)
@@ -543,6 +602,13 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     frame = base_frame.copy()
     split, split_audit = _assign_split(frame, args, seed)
     frame["final_split"] = split.to_numpy()
+    is_diagnostic_split = bool(split_audit.get("diagnostic_split_created"))
+    frame["split_origin"] = (
+        "generated_from_already_scored_predictions"
+        if is_diagnostic_split
+        else "supplied_split_registry"
+    )
+    frame["split_is_diagnostic"] = is_diagnostic_split
     train = frame[frame["final_split"] == "train"].reset_index(drop=True)
     valid = frame[frame["final_split"] == "valid"].reset_index(drop=True)
     test = frame[frame["final_split"] == "test"].reset_index(drop=True)
@@ -551,7 +617,9 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
 
     model = _make_classifier(args.meta_classifier, seed, args.n_jobs)
     model.fit(train[score_cols], train["label"].astype(int).to_numpy())
-    valid_score = model.predict_proba(valid[score_cols])[:, 1]
+    valid_score_raw = model.predict_proba(valid[score_cols])[:, 1]
+    calibrator = _fit_calibrator(args.calibration, valid["label"].to_numpy(), valid_score_raw)
+    valid_score = _apply_calibrator(calibrator, valid_score_raw)
     threshold, valid_metrics = fast_optimize_binary_threshold(
         valid["label"].to_numpy(),
         valid_score,
@@ -560,7 +628,6 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
         min_recall=args.min_recall,
     )
     test_score_raw = model.predict_proba(test[score_cols])[:, 1]
-    calibrator = _fit_calibrator(args.calibration, valid["label"].to_numpy(), valid_score)
     test_score = _apply_calibrator(calibrator, test_score_raw)
     metrics = fast_binary_metrics(test["label"].to_numpy(), test_score, threshold=threshold)
     brier = float(np.mean((test_score - test["label"].to_numpy(dtype=float)) ** 2))
@@ -612,7 +679,8 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     summary: dict[str, Any] = {
         "stage": "Finalized V2 — leakage-aware calibrated ensemble",
         "model": f"finalized_ensemble_{args.meta_classifier}",
-        "status": "trained",
+        "status": "diagnostic_only" if is_diagnostic_split else "trained",
+        "publishable": not is_diagnostic_split,
         "seed": int(seed),
         "score_columns": score_cols,
         "class_distribution": {
@@ -678,6 +746,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     score_cols = [c for c in frame.columns if c.startswith("score__")]
     if len(score_cols) < args.min_model_scores:
         raise ValueError(f"Need at least {args.min_model_scores} model score columns; found {len(score_cols)}")
+    if args.strict_leakage_free:
+        missing_score_rows = int(frame[score_cols].isna().any(axis=1).sum())
+        if missing_score_rows:
+            raise ValueError(
+                f"Strict leakage-free mode requires every base-model score for every row; "
+                f"{missing_score_rows} row(s) have missing component scores."
+            )
     frame.to_csv(out_dir / "merged_base_prediction_frame.csv", index=False)
     seed_values = [int(s) for s in str(args.seeds).replace(",", " ").split() if str(s).strip()]
     if not seed_values:
@@ -687,17 +762,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         seed_dir = out_dir / f"seed_{seed}"
         summaries.append(run_one_seed(frame, score_cols, args, seed, seed_dir))
     seed_summary = aggregate_seed_metrics(summaries, out_dir)
-    best = max(summaries, key=lambda x: float(x.get("mcc") if x.get("mcc") is not None else -999))
+    best = max(
+        summaries,
+        key=lambda x: float(
+            x.get("validation_metrics", {}).get("mcc")
+            if x.get("validation_metrics", {}).get("mcc") is not None
+            else -999
+        ),
+    )
+    publishable = all(bool(summary.get("publishable")) for summary in summaries)
     final_summary = {
         "stage": "Finalized V2 — leakage-aware calibrated ensemble",
         "model": f"finalized_ensemble_{args.meta_classifier}",
-        "status": "trained",
+        "status": "trained" if publishable else "diagnostic_only",
+        "publishable": publishable,
         "implementation": "improved_v2",
         "input_prediction_files": [str(p) for p in files],
         "score_columns": score_cols,
         "rows_used": int(len(frame)),
         "seeds": seed_values,
         "best_seed": best.get("seed"),
+        "best_seed_selection_source": "validation_mcc",
+        "best_seed_validation_metrics": best.get("validation_metrics", {}),
+        "split_audit": best.get("split_audit", {}),
         "best_seed_metrics_file": str(out_dir / f"seed_{best.get('seed')}" / "metrics.json"),
         "seed_metrics_file": str(out_dir / "seed_metrics.csv"),
         "seed_metric_summary_file": str(out_dir / "seed_metric_summary.csv"),

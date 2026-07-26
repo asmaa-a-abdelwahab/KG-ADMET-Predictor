@@ -16,8 +16,8 @@ RUN_DIR=${RUN_DIR:-$PROJECT_DIR/runs/current}
 module purge || true
 module load python/3.11 || true
 
-python -m venv "$PROJECT_DIR/.venv-kg-admet"
-source "$PROJECT_DIR/.venv-kg-admet/bin/activate"
+python -m venv "$PROJECT_DIR/.venv-pring-app"
+source "$PROJECT_DIR/.venv-pring-app/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install neo4j
 python -m pip install -e "$PRING_DIR"

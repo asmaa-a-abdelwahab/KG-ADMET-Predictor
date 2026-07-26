@@ -2,8 +2,8 @@
 #SBATCH --job-name=stage1_gds_baseline
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage1_gds_baseline_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage1_gds_baseline_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/stage1_gds_baseline_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/stage1_gds_baseline_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -30,7 +30,7 @@ fi
 if [ ! -f "$RUNNER" ]; then
   echo "ERROR: Could not find _run_selected_implementation.sh" >&2
   echo "Tried runner path: $RUNNER" >&2
-  echo "Set PROJECT_DIR=/home/asmaaali/KG-ADMET-Predictor or MODEL_ROOT=/home/asmaaali/KG-ADMET-Predictor/modeling before sbatch." >&2
+  echo "Set PROJECT_DIR=/home/asmaaali/PRING-APP or MODEL_ROOT=/home/asmaaali/PRING-APP/modeling before sbatch." >&2
   exit 2
 fi
 

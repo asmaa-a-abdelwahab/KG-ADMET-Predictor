@@ -4,8 +4,8 @@
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
-#SBATCH --output=/home/asmaaali/KG-ADMET-Predictor/logs/stage2_fast_%j.out
-#SBATCH --error=/home/asmaaali/KG-ADMET-Predictor/logs/stage2_fast_%j.err
+#SBATCH --output=/home/asmaaali/PRING-APP/logs/stage2_fast_%j.out
+#SBATCH --error=/home/asmaaali/PRING-APP/logs/stage2_fast_%j.err
 
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /bin/bash "$0" "$@"
@@ -14,14 +14,14 @@ fi
 set -euo pipefail
 
 echo "============================================================"
-echo "PRING / KG-ADMET Stage 2 Efficient KGE Job - NO NEO4J"
+echo "PRING-APP Stage 2 Efficient KGE Job - NO NEO4J"
 echo "Job ID: ${SLURM_JOB_ID:-unknown}"
 echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "============================================================"
 
-PROJECT_DIR="/home/asmaaali/KG-ADMET-Predictor"
-DEFAULT_MODELING_DIR="/home/asmaaali/PRING/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
+PROJECT_DIR="/home/asmaaali/PRING-APP"
+DEFAULT_MODELING_DIR="/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
 DEFAULT_OUTPUT_DIR="${PROJECT_DIR}/models_stage2_fast"
 DEFAULT_REPORT_DIR="${PROJECT_DIR}/reports/stage2_fast"
 

@@ -8,6 +8,14 @@ import requests
 PREDICTION_API_URL = os.getenv("PREDICTION_API_URL", "http://predictor:8000").rstrip("/")
 CONNECT_TIMEOUT = int(os.getenv("PREDICTION_CONNECT_TIMEOUT_SECONDS", "10"))
 READ_TIMEOUT = int(os.getenv("PREDICTION_TIMEOUT_SECONDS", "1800"))
+PREDICTION_API_KEY = os.getenv("PREDICTION_API_KEY", "")
+
+
+def _headers() -> dict[str, str]:
+    headers = {"Connection": "close"}
+    if PREDICTION_API_KEY:
+        headers["X-PRING-API-Key"] = PREDICTION_API_KEY
+    return headers
 
 
 class PredictionAPIError(RuntimeError):
@@ -27,6 +35,7 @@ def get_prediction_status() -> dict[str, Any]:
         response = requests.get(
             f"{PREDICTION_API_URL}/health",
             timeout=(CONNECT_TIMEOUT, 30),
+            headers=_headers(),
         )
         response.raise_for_status()
         return response.json()
@@ -46,7 +55,7 @@ def predict_interactions(compounds: list[str], targets: list[str]) -> dict[str, 
             f"{PREDICTION_API_URL}/predict",
             json={"compounds": compounds, "targets": targets},
             timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-            headers={"Connection": "close"},
+            headers=_headers(),
         )
     except requests.ConnectionError as exc:
         raise PredictionAPIError(

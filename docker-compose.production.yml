@@ -1,8 +1,12 @@
-name: kg-admet-pring-production
+name: pring-app-production
 
 # Use together with the main compose file:
 # docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 services:
+  neo4j:
+    environment:
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?NEO4J_PASSWORD is required for production}"
+
   predictor:
     environment:
       PREDICTION_SCORE_MODE: auto
@@ -23,7 +27,12 @@ services:
       STAGE1_PAIR_FEATURE_FRAME: "${STAGE1_PAIR_FEATURE_FRAME:-}"
       PREDICTION_TARGET_BACKGROUND_MIN_ROWS: "${PREDICTION_TARGET_BACKGROUND_MIN_ROWS:-20}"
       PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT: "${PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT:-0.01}"
-      PRING_GRAPH_VERSION: "${PRING_GRAPH_VERSION:-unknown_graph_snapshot}"
+      PRING_GRAPH_VERSION: "${PRING_GRAPH_VERSION:?PRING_GRAPH_VERSION is required for version-safe prediction caching}"
+      PREDICTION_ALLOW_STALE_CACHE: "false"
+      PREDICTION_ALLOW_RUNTIME_MISMATCH: "false"
+      PREDICTION_REQUIRE_VERIFIED_ARTIFACTS: "true"
+      PREDICTION_API_KEY: "${PREDICTION_API_KEY:?PREDICTION_API_KEY is required for production}"
+      PREDICTION_DEBUG_ERRORS: "false"
       PREDICTION_UNLOAD_STAGE3_AFTER_SCORE: "true"
       PREDICTION_UNLOAD_SHARED_GRAPH_AFTER_SCORE: "false"
       PREDICTION_STAGE3_BATCH_SIZE: "1"
@@ -47,5 +56,6 @@ services:
   streamlit:
     environment:
       PREDICTION_API_URL: http://predictor:8000
+      PREDICTION_API_KEY: "${PREDICTION_API_KEY:?PREDICTION_API_KEY is required for production}"
       PREDICTION_CONNECT_TIMEOUT_SECONDS: "10"
       PREDICTION_TIMEOUT_SECONDS: "${PREDICTION_TIMEOUT_SECONDS:-1800}"

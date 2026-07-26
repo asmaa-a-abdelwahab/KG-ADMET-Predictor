@@ -27,7 +27,7 @@ if [ "$SCRIPT_NAME" = "slurm_script" ]; then
   esac
 fi
 
-PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/KG-ADMET-Predictor}"
+PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/PRING-APP}"
 MODEL_ROOT="${MODEL_ROOT:-$PROJECT_DIR/modeling}"
 IMPL="${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}"
 
@@ -55,8 +55,8 @@ bash "$MODEL_ROOT/scripts/use_implementation.sh" "$IMPL"
 
 export MODEL_IMPL="$IMPL"
 export MODEL_IMPLEMENTATION="$IMPL"
-export MODELING_PACKAGE_DIR="$MODEL_ROOT"
-export PYTHONPATH="$MODEL_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export MODELING_PACKAGE_DIR="$IMPL_DIR"
+export PYTHONPATH="$IMPL_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # Keep old and improved outputs separate by default. Override these env vars
 # manually if you intentionally want a shared output directory.

@@ -2,9 +2,16 @@
 
 This folder contains three selectable modeling implementations:
 
-- `legacy` — original implementation, kept unchanged for reproducibility.
+- `legacy` — original algorithmic implementation, retained for historical comparison.
 - `improved` — first improved implementation with leakage-safe Stage 1, imbalance-aware thresholds, Stage 3 tuning, and stacked ensemble.
-- `improved_v2` — finalization implementation with the previous improvements plus leakage-aware final validation, common-test evaluation, calibration, uncertainty outputs, per-target metrics/models, seed aggregation, candidate ranking, external-validation hooks, and HPO planning.
+- `improved_v2` — canonical implementation with validation-selected thresholds/seeds,
+  calibrated probabilities, uncertainty outputs, per-target diagnostics, candidate
+  ranking, external-validation hooks, and production-serving modules.
+
+The active `modeling/pring_modeling` package and
+`implementations/improved_v2/pring_modeling` are kept synchronized. Selection
+scripts no longer delete or replace source trees with symlinks; wrappers select
+an implementation through `PYTHONPATH`.
 
 Select an implementation by setting `MODEL_IMPL`:
 
@@ -25,10 +32,10 @@ models_all_stages_improved_v2/ reports/all_stages_improved_v2/
 ## Recommended final run
 
 ```bash
-cd /home/asmaaali/KG-ADMET-Predictor
+cd /home/asmaaali/PRING-APP
 
-PROJECT_DIR=/home/asmaaali/KG-ADMET-Predictor \
-MODEL_ROOT=/home/asmaaali/KG-ADMET-Predictor/modeling \
+PROJECT_DIR=/home/asmaaali/PRING-APP \
+MODEL_ROOT=/home/asmaaali/PRING-APP/modeling \
 MODEL_IMPL=improved_v2 \
 MODEL_STAGE2_MODELS="complex distmult rotate" \
 RUN_STAGE1=true \
@@ -47,7 +54,10 @@ MODEL_FINAL_CALIBRATION=platt \
 sbatch modeling/scripts/run_all_models_compare_hpc.sh
 ```
 
-For a stricter publishable final ensemble, use only base prediction files that already contain explicit train/valid/test split annotations and add:
+For a potentially publishable final ensemble, every base score must be produced
+out-of-fold under the same registered outer split (or a defensible nested-CV
+design). Merely re-splitting held-out base predictions is diagnostic only. Use
+the strict guard:
 
 ```bash
 MODEL_FINAL_STRICT_LEAKAGE_FREE=true
@@ -81,7 +91,8 @@ models_all_stages_improved_v2/finalized_v2/seed_<N>/most_uncertain_predictions.c
 ## HPO plan generation
 
 ```bash
-MODEL_IMPL=improved_v2 bash modeling/scripts/use_implementation.sh improved_v2
+bash modeling/scripts/use_implementation.sh improved_v2
+PYTHONPATH=modeling/implementations/improved_v2 \
 python -m pring_modeling.hpo_plan \
   --output-dir reports/hpo_plan_improved_v2 \
   --stage all \
@@ -100,10 +111,10 @@ reports/hpo_plan_improved_v2/submit_hpo.sh
 For a reliable comparison, generate one canonical split manifest and run all three implementations against the same materialized modeling directory:
 
 ```bash
-cd /home/asmaaali/KG-ADMET-Predictor
+cd /home/asmaaali/PRING-APP
 
-PROJECT_DIR=/home/asmaaali/KG-ADMET-Predictor \
-MODEL_ROOT=/home/asmaaali/KG-ADMET-Predictor/modeling \
+PROJECT_DIR=/home/asmaaali/PRING-APP \
+MODEL_ROOT=/home/asmaaali/PRING-APP/modeling \
 MODEL_IMPLS="legacy improved improved_v2" \
 MODEL_SHARED_SPLIT_STRATEGY=compound \
 MODEL_SHARED_SPLIT_SEED=42 \
