@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Add a searchable GitHub Pages documentation site and automated deployment.
+- Add application CI, contribution guidance, security reporting, citation
+  metadata, and consistent text-file rules.
+- Make production-artifact integration tests skip cleanly when large local
+  artifacts are unavailable.
+- Remove committed build products and ignore future generated documentation
+  and coverage output.
+- Move one-off prediction patch instructions and diagnostic scripts into an
+  excluded documentation archive.
+
 ## 0.2.0 — 2026-07-26
 
 - Align application, compose, container, workspace, documentation, and package

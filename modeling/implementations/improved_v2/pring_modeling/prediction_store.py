@@ -349,13 +349,21 @@ class PredictionCacheStore:
             additions: list[dict[str, Any]] = []
             skipped = 0
             for row in rows:
-                key = self._row_key(row)
+                prepared = dict(row)
+                # Cache rows are inference records, never observational labels.
+                # Persist the exclusion flag as text so CSV type inference cannot
+                # silently turn it into 1.0/0.0 when nullable columns are present.
+                prepared["record_type"] = "production_prediction_cache"
+                prepared["exclude_from_training"] = "true"
+                prepared["final_split"] = "production_inference"
+                prepared["observed_label"] = None
+                key = self._row_key(prepared)
                 if not key[0] or not key[1]:
                     raise ValueError("Cannot cache a row without canonical compound and target keys.")
                 if key in existing:
                     skipped += 1
                     continue
-                additions.append(dict(row))
+                additions.append(prepared)
                 existing.add(key)
             if not additions:
                 return {

@@ -7,11 +7,14 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
+site/
+.coverage
+htmlcov/
 .venv/
 venv/
 pring-env/
-# Historical local virtual environment directory; do not rename in place.
-KG-ADMET-PREDICTOR/
 .pytest_cache/
 .ipynb_checkpoints/
 .cache/
@@ -41,6 +44,7 @@ neo4j/data/
 neo4j/logs/
 neo4j/import/
 neo4j/plugins/
+plugins/*.jar
 
 # Large generated/import artifacts
 *.zip

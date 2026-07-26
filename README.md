@@ -1,5 +1,10 @@
 # PRING-APP
 
+[![CI](https://github.com/asmaa-a-abdelwahab/PRING-APP/actions/workflows/ci.yml/badge.svg)](https://github.com/asmaa-a-abdelwahab/PRING-APP/actions/workflows/ci.yml)
+[![Documentation](https://github.com/asmaa-a-abdelwahab/PRING-APP/actions/workflows/docs.yml/badge.svg)](https://asmaa-a-abdelwahab.github.io/PRING-APP/)
+
+**Documentation:** <https://asmaa-a-abdelwahab.github.io/PRING-APP/>
+
 PRING-APP is the application, graph-serving, modeling, and prediction layer around
 [PRING-PACKAGE](https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE). It does not
 reimplement PubChem extraction or canonical graph generation. The workflow is:

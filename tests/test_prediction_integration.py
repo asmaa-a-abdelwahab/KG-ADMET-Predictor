@@ -4,10 +4,22 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-os.environ.setdefault("PRODUCTION_MODEL_DIR", str(ROOT / "artifacts/models/production"))
-os.environ.setdefault("PRECOMPUTED_SCORE_FRAME", str(ROOT / "artifacts/results/production/finalized_training_frame.csv"))
+MODEL_DIR = ROOT / "artifacts/models/production"
+SCORE_FRAME = ROOT / "artifacts/results/production/finalized_training_frame.csv"
+pytestmark = [
+    pytest.mark.production_assets,
+    pytest.mark.skipif(
+        not (MODEL_DIR / "production_ensemble.joblib").is_file()
+        or not SCORE_FRAME.is_file(),
+        reason="local production model and result artifacts are not available",
+    ),
+]
+
+os.environ.setdefault("PRODUCTION_MODEL_DIR", str(MODEL_DIR))
+os.environ.setdefault("PRECOMPUTED_SCORE_FRAME", str(SCORE_FRAME))
 os.environ.setdefault("PREDICTION_SCORE_MODE", "precomputed")
 
 from pring_modeling.prediction_service import PRINGPredictionService
@@ -33,7 +45,11 @@ def test_precomputed_active_and_inactive_predictions() -> None:
     for prediction in output["predictions"]:
         assert 0.0 <= prediction["prediction"]["calibrated_probability"] <= 1.0
         assert prediction["explainability"]["local_component_contributions"]
-        assert prediction["explainability"]["tree_shap"]["status"] in {"computed", "unavailable"}
+        assert prediction["explainability"]["tree_shap"]["status"] in {
+            "computed",
+            "unavailable",
+            "disabled",
+        }
 
 
 def test_unknown_pair_returns_explicit_error() -> None:
@@ -46,7 +62,8 @@ def test_unknown_pair_returns_explicit_error() -> None:
     finally:
         service.close()
     assert output["successful_pairs"] == 0
-    assert "not present in the precomputed score frame" in output["errors"][0]["error"]
+    assert "absent from both the validated reference frame" in output["errors"][0]["error"]
+    assert "live inference is disabled" in output["errors"][0]["error"]
 
 
 def test_report_exports() -> None:
@@ -60,6 +77,6 @@ def test_report_exports() -> None:
     report = generate_prediction_report_html(output)
     summary = prediction_summary_dataframe(output)
     assert "PRING compound-target prediction report" in report
-    assert "TreeSHAP" in report
+    assert "Local calibrated-probability explanation" in report
     assert not summary.empty
     assert "calibrated_probability" in summary.columns

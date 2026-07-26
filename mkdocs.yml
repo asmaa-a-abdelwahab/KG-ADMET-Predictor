@@ -1,0 +1,92 @@
+site_name: PRING-APP
+site_description: Neo4j knowledge-graph exploration, modeling, prediction, and reporting
+site_url: https://asmaa-a-abdelwahab.github.io/PRING-APP/
+repo_url: https://github.com/asmaa-a-abdelwahab/PRING-APP
+repo_name: asmaa-a-abdelwahab/PRING-APP
+edit_uri: edit/main/docs/
+copyright: PRING contributors
+
+docs_dir: docs
+site_dir: site
+strict: true
+
+exclude_docs: |
+  archive/**
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Use light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/asmaa-a-abdelwahab/PRING-APP
+
+nav:
+  - Home: index.md
+  - Start:
+      - Installation and quick start: getting-started.md
+      - Configuration: configuration.md
+  - Architecture:
+      - System architecture: architecture.md
+      - Knowledge graph: knowledge-graph.md
+      - Package integration: package-integration.md
+  - Modeling and prediction:
+      - Modeling pipeline: modeling-and-validation.md
+      - Prediction service: prediction-service.md
+      - Scientific use: scientific-use.md
+  - Operations:
+      - Deployment and security: operations.md
+      - Release gates: REMEDIATION_AND_RELEASE_GATES.md
+      - Neo4j troubleshooting: TROUBLESHOOTING_NEO4J.md
+      - PRING installation troubleshooting: TROUBLESHOOTING_PRING_INSTALL.md
