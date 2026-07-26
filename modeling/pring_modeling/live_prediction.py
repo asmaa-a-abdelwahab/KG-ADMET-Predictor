@@ -13,20 +13,123 @@ import numpy as np
 import pandas as pd
 
 
+def _normalise_pair_key(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+class Stage1PairFeatureStore:
+    """Replay the exact Stage 1 pair features exported during modeling.
+
+    FastRP coordinates are tied to the exact graph projection and random seed.
+    Recomputing them from a rematerialized Neo4j graph may not reproduce the
+    training-time Stage 1 score. This store therefore prefers the original
+    exported pair-feature rows whenever they are available.
+    """
+
+    DEFAULT_FILES = (
+        "compound_target_training_pairs_gds_features.csv",
+        "candidate_pairs_gds_features.csv",
+        "compound_target_training_pairs_gds_features.parquet",
+        "candidate_pairs_gds_features.parquet",
+    )
+    COMPOUND_COLUMNS = ("compound_key", "compound_node_ref", "compound_ref", "source_ref")
+    TARGET_COLUMNS = ("target_key", "protein_node_ref", "protein_ref", "target_ref")
+
+    def __init__(self, feature_columns: list[str]):
+        self.feature_columns = list(feature_columns)
+        self.index: dict[tuple[str, str], dict[str, float]] = {}
+        self.loaded_files: list[str] = []
+        self.error: str | None = None
+        self._load()
+
+    def _configured_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        explicit = os.getenv("STAGE1_PAIR_FEATURE_FRAME", "").strip()
+        if explicit:
+            for token in explicit.split(os.pathsep):
+                token = token.strip()
+                if token:
+                    paths.append(Path(token))
+        directory = Path(os.getenv("STAGE1_PAIR_FEATURE_DIR", "/modeling_prepared/stage1_neo4j_gds_baselines"))
+        if directory.exists():
+            for name in self.DEFAULT_FILES:
+                candidate = directory / name
+                if candidate.exists():
+                    paths.append(candidate)
+        # Preserve order while removing duplicates.
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in paths:
+            resolved = str(path)
+            if resolved not in seen:
+                unique.append(path)
+                seen.add(resolved)
+        return unique
+
+    @staticmethod
+    def _read(path: Path) -> pd.DataFrame:
+        if path.suffix.lower() in {".parquet", ".pq"}:
+            return pd.read_parquet(path)
+        return pd.read_csv(path, low_memory=False)
+
+    def _load(self) -> None:
+        errors: list[str] = []
+        for path in self._configured_paths():
+            try:
+                if not path.exists():
+                    continue
+                frame = self._read(path)
+                compound_column = next((c for c in self.COMPOUND_COLUMNS if c in frame.columns), None)
+                target_column = next((c for c in self.TARGET_COLUMNS if c in frame.columns), None)
+                missing_features = [c for c in self.feature_columns if c not in frame.columns]
+                if not compound_column or not target_column or missing_features:
+                    errors.append(
+                        f"{path}: compound_column={compound_column}, target_column={target_column}, "
+                        f"missing_features={missing_features}"
+                    )
+                    continue
+                subset = frame[[compound_column, target_column, *self.feature_columns]].dropna(
+                    subset=[compound_column, target_column, *self.feature_columns]
+                )
+                for row in subset.to_dict(orient="records"):
+                    key = (_normalise_pair_key(row[compound_column]), _normalise_pair_key(row[target_column]))
+                    if key[0] and key[1]:
+                        self.index[key] = {column: float(row[column]) for column in self.feature_columns}
+                self.loaded_files.append(str(path))
+            except Exception as exc:
+                errors.append(f"{path}: {type(exc).__name__}: {exc}")
+        self.error = "; ".join(errors) if errors else None
+
+    @property
+    def available(self) -> bool:
+        return bool(self.index)
+
+    def get(self, compound_key: str, target_key: str) -> dict[str, float] | None:
+        return self.index.get((_normalise_pair_key(compound_key), _normalise_pair_key(target_key)))
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "row_count": len(self.index),
+            "loaded_files": self.loaded_files,
+            "load_warning": self.error,
+        }
+
+
 class Stage1LiveScorer:
-    """Reproduce the deployable Stage 1 Extra Trees component for a new pair."""
+    """Reproduce Stage 1 using exact exported features before Neo4j fallback."""
 
     def __init__(self, model_dir: str | Path | None, embedding_property: str = "pringFastRP"):
         self.model_dir = Path(model_dir) if model_dir else None
         self.embedding_property = str(embedding_property)
         self.model: Any | None = None
         self.feature_columns: list[str] = []
+        self.feature_store: Stage1PairFeatureStore | None = None
         self.load_error: str | None = None
 
         if not self.model_dir:
             self.load_error = "STAGE1_MODEL_DIR is not configured."
             return
-
         model_file = self.model_dir / "stage1_tabular_extra_trees.joblib"
         columns_file = self.model_dir / "feature_columns.json"
         if not model_file.exists() or not columns_file.exists():
@@ -35,7 +138,6 @@ class Stage1LiveScorer:
                 "stage1_tabular_extra_trees.joblib and feature_columns.json."
             )
             return
-
         try:
             self.model = joblib.load(model_file)
             loaded_columns = json.loads(columns_file.read_text(encoding="utf-8"))
@@ -44,6 +146,7 @@ class Stage1LiveScorer:
             self.feature_columns = [str(value) for value in loaded_columns]
             if not self.feature_columns:
                 raise ValueError("feature_columns.json does not define any feature columns.")
+            self.feature_store = Stage1PairFeatureStore(self.feature_columns)
         except Exception as exc:
             self.model = None
             self.feature_columns = []
@@ -59,29 +162,27 @@ class Stage1LiveScorer:
             "model_dir": str(self.model_dir) if self.model_dir else None,
             "embedding_property": self.embedding_property,
             "feature_columns": self.feature_columns,
+            "exact_pair_feature_store": self.feature_store.status() if self.feature_store else None,
             "error": self.load_error,
         }
 
-    def score(
-        self,
-        compound_properties: dict[str, Any],
-        protein_properties: dict[str, Any],
-    ) -> tuple[float, dict[str, float]]:
-        if not self.available:
-            raise RuntimeError(self.load_error or "Stage 1 live artifacts are unavailable.")
+    def _predict(self, values: dict[str, float]) -> float:
+        frame = pd.DataFrame([[values[column] for column in self.feature_columns]], columns=self.feature_columns)
+        return float(self.model.predict_proba(frame)[:, 1][0])
 
+    def _from_neo4j(
+        self, compound_properties: dict[str, Any], protein_properties: dict[str, Any]
+    ) -> dict[str, float]:
         compound_vector = compound_properties.get(self.embedding_property)
         protein_vector = protein_properties.get(self.embedding_property)
         if not isinstance(compound_vector, (list, tuple)) or not isinstance(protein_vector, (list, tuple)):
             raise RuntimeError(
-                f"Neo4j property {self.embedding_property!r} must exist on both the Compound and Protein nodes."
+                f"Neo4j property {self.embedding_property!r} must exist on both Compound and Protein nodes."
             )
-
         compound = np.asarray(compound_vector, dtype=float)
         protein = np.asarray(protein_vector, dtype=float)
         if compound.ndim != 1 or protein.ndim != 1 or compound.size == 0 or compound.shape != protein.shape:
-            raise RuntimeError("Compound and Protein FastRP vectors must be non-empty one-dimensional vectors of equal size.")
-
+            raise RuntimeError("Compound and Protein FastRP vectors must be non-empty vectors of equal size.")
         safe_name = self.embedding_property.lower().replace(" ", "_").replace("-", "_")
         dot = float(np.dot(compound, protein))
         denominator = float(np.linalg.norm(compound) * np.linalg.norm(protein))
@@ -97,15 +198,27 @@ class Stage1LiveScorer:
         if missing:
             raise RuntimeError(
                 "The live Stage 1 scorer cannot reproduce the saved feature schema. "
-                f"Missing features: {missing}; embedding property: {self.embedding_property!r}."
+                f"Missing features: {missing}."
             )
+        return {column: float(values[column]) for column in self.feature_columns}
 
-        frame = pd.DataFrame(
-            [[values[column] for column in self.feature_columns]],
-            columns=self.feature_columns,
-        )
-        score = float(self.model.predict_proba(frame)[:, 1][0])
-        return score, {column: float(values[column]) for column in self.feature_columns}
+    def score(
+        self,
+        pair: Any,
+        node_property_provider: Callable[[Any], tuple[dict[str, Any], dict[str, Any]]] | None,
+    ) -> tuple[float, dict[str, float], str]:
+        if not self.available:
+            raise RuntimeError(self.load_error or "Stage 1 live artifacts are unavailable.")
+        exact = self.feature_store.get(pair.compound_key, pair.target_key) if self.feature_store else None
+        if exact is not None:
+            return self._predict(exact), exact, "training_time_pair_feature_export"
+        if node_property_provider is None:
+            raise RuntimeError(
+                "No exact Stage 1 pair-feature row was found and Neo4j feature recomputation is unavailable."
+            )
+        compound_properties, protein_properties = node_property_provider(pair)
+        values = self._from_neo4j(compound_properties, protein_properties)
+        return self._predict(values), values, "neo4j_embedding_recomputed"
 
 
 class SharedStage3Graph:
@@ -461,7 +574,7 @@ class Stage3LiveScorer:
 
 
 class LiveComponentScorer:
-    """Generate all deployable component scores for previously unseen graph pairs."""
+    """Generate production component scores with optional Stage 1 execution."""
 
     STAGE1_COLUMN = "score__stage1_tabular_extra_trees"
     RGCN_COLUMN = "score__stage3_rgcn_sampled"
@@ -475,26 +588,17 @@ class LiveComponentScorer:
                 "The hybrid predictor requires the three deployable production scores: "
                 f"{sorted(expected)}; received {self.score_columns}."
             )
-
         self.stage1 = Stage1LiveScorer(
             os.getenv("STAGE1_MODEL_DIR", "/models/improved_v2/stage1_gds_extra_trees"),
             os.getenv("STAGE1_EMBEDDING_PROPERTY", "pringFastRP"),
         )
-        self.shared_graph = SharedStage3Graph(
-            os.getenv("STAGE3_PREPARED_DIR", "/modeling_prepared")
-        )
+        self.shared_graph = SharedStage3Graph(os.getenv("STAGE3_PREPARED_DIR", "/modeling_prepared"))
         device = os.getenv("PREDICTION_DEVICE", "cpu")
         self.rgcn = Stage3LiveScorer(
-            "rgcn",
-            os.getenv("RGCN_MODEL_DIR", "/models/improved_v2/stage3_rgcn_sampled"),
-            self.shared_graph,
-            device,
+            "rgcn", os.getenv("RGCN_MODEL_DIR", "/models/improved_v2/stage3_rgcn_sampled"), self.shared_graph, device
         )
         self.hgt = Stage3LiveScorer(
-            "hgt",
-            os.getenv("HGT_MODEL_DIR", "/models/improved_v2/stage3_hgt_sampled"),
-            self.shared_graph,
-            device,
+            "hgt", os.getenv("HGT_MODEL_DIR", "/models/improved_v2/stage3_hgt_sampled"), self.shared_graph, device
         )
         self.unload_models_after_score = os.getenv(
             "PREDICTION_UNLOAD_STAGE3_AFTER_SCORE", "true"
@@ -508,24 +612,19 @@ class LiveComponentScorer:
             from .pyg_runtime import pyg_runtime_status
             pyg_status = pyg_runtime_status(include_traceback=False)
         except Exception as exc:
-            pyg_status = {
-                "ready": False,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
-        components = {
-            "stage1": self.stage1.status(),
-            "stage3_rgcn": self.rgcn.status(),
-            "stage3_hgt": self.hgt.status(),
-        }
+            pyg_status = {"ready": False, "error_type": type(exc).__name__, "error": str(exc)}
+        stage3_ready = bool(
+            self.rgcn.artifact_available and self.hgt.artifact_available and pyg_status.get("ready")
+        )
         return {
-            "ready": bool(
-                self.stage1.available
-                and self.rgcn.artifact_available
-                and self.hgt.artifact_available
-                and pyg_status.get("ready")
-            ),
-            "components": components,
+            "ready": bool(stage3_ready and self.stage1.available),
+            "primary_ready": bool(stage3_ready and self.stage1.available),
+            "stage3_fallback_ready": stage3_ready,
+            "components": {
+                "stage1": self.stage1.status(),
+                "stage3_rgcn": self.rgcn.status(),
+                "stage3_hgt": self.hgt.status(),
+            },
             "pytorch_geometric": pyg_status,
             "shared_graph": self.shared_graph.status(),
             "unload_models_after_score": self.unload_models_after_score,
@@ -535,28 +634,32 @@ class LiveComponentScorer:
     def score_many(
         self,
         pairs: list[Any],
-        node_property_provider: Callable[[Any], tuple[dict[str, Any], dict[str, Any]]],
+        node_property_provider: Callable[[Any], tuple[dict[str, Any], dict[str, Any]]] | None,
+        *,
+        include_stage1: bool = True,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         if not pairs:
             return {}
         status = self.status()
-        if not status["ready"]:
+        required_ready = status["primary_ready"] if include_stage1 else status["stage3_fallback_ready"]
+        if not required_ready:
             raise RuntimeError(f"Live component inference is not ready: {status}")
 
-        stage1_scores: list[float] = []
-        stage1_features: list[dict[str, float]] = []
-        for pair in pairs:
-            compound_properties, protein_properties = node_property_provider(pair)
-            score, features = self.stage1.score(compound_properties, protein_properties)
-            stage1_scores.append(score)
-            stage1_features.append(features)
+        stage1_scores = [float("nan")] * len(pairs)
+        stage1_features: list[dict[str, float]] = [{} for _ in pairs]
+        stage1_sources = ["not_used_by_stage3_fallback"] * len(pairs)
+        if include_stage1:
+            for index, pair in enumerate(pairs):
+                score, features, source = self.stage1.score(pair, node_property_provider)
+                stage1_scores[index] = score
+                stage1_features[index] = features
+                stage1_sources[index] = source
 
         try:
             rgcn_scores = self.rgcn.score_many(pairs)
         finally:
             if self.unload_models_after_score:
                 self.rgcn.unload()
-
         try:
             hgt_scores = self.hgt.score_many(pairs)
         finally:
@@ -574,9 +677,9 @@ class LiveComponentScorer:
                 "details": {
                     "score_source": "live_component_inference",
                     "stage1_pair_features": stage1_features[index],
+                    "stage1_feature_source": stage1_sources[index],
                 },
             }
-
         if self.unload_graph_after_score:
             self.shared_graph.unload()
         return output

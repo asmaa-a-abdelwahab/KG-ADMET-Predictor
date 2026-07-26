@@ -36,6 +36,7 @@ COPY scripts/install_pring_runtime.sh /opt/kg/bin/install_pring_runtime.sh
 COPY modeling/pring_modeling ./pring_modeling
 COPY modeling/stages ./stages
 COPY modeling/notebooks ./notebooks
+COPY modeling/scripts /opt/kg/modeling/scripts
 COPY modeling/scripts/run_modeling.sh /opt/kg/bin/run_modeling.sh
 RUN chmod +x /opt/kg/bin/*.sh
 
