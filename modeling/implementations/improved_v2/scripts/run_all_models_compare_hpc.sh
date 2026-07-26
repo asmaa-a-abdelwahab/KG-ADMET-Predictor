@@ -23,8 +23,8 @@ echo "============================================================"
 # 1. Paths
 # ------------------------------------------------------------
 
-PROJECT_DIR="/home/asmaaali/PRING-APP"
-DEFAULT_MODELING_DIR="/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling"
+PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/PRING-APP}"
+DEFAULT_MODELING_DIR="${DEFAULT_MODELING_DIR:-/home/asmaaali/PRING-PACKAGE/runs/cyp450_5enzymes_uncapped_raw_rematerialized/graph/ml/modeling}"
 
 cd "$PROJECT_DIR"
 
@@ -43,13 +43,17 @@ mkdir -p "$PROJECT_DIR/logs" "$OUT_ROOT" "$REPORT_ROOT"
 echo "Python executable: $(which python)"
 python --version
 
-echo "Installing/updating modeling package..."
-python -m pip install -e "${MODELING_PACKAGE_DIR:-./modeling}"
+if [ "${MODEL_INSTALL_RUNTIME:-true}" = "true" ]; then
+  echo "Installing/updating modeling package..."
+  python -m pip install -e "${MODELING_PACKAGE_DIR:-./modeling}"
 
-REQ_PYG="${MODELING_PACKAGE_DIR:-$PROJECT_DIR/modeling}/requirements-pyg-cu124.txt"
-if [ -f "$REQ_PYG" ]; then
-  echo "Installing PyG CUDA 12.4 sampling dependencies if needed..."
-  python -m pip install -r "$REQ_PYG" || true
+  REQ_PYG="${MODELING_PACKAGE_DIR:-$PROJECT_DIR/modeling}/requirements-pyg-cu124.txt"
+  if [ -f "$REQ_PYG" ]; then
+    echo "Installing PyG CUDA 12.4 sampling dependencies if needed..."
+    python -m pip install -r "$REQ_PYG" || true
+  fi
+else
+  echo "MODEL_INSTALL_RUNTIME=false; using the pre-installed HPC environment."
 fi
 
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"

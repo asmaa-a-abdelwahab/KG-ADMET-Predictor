@@ -194,6 +194,25 @@ The Streamlit app can also trigger this command from the **PRING run data / EDA*
 
 Use the example Slurm scripts in `examples/hpc/`.
 
+### Complete five-CYP scientific workflow
+
+For a new or existing PRING-PACKAGE run followed by modeling-ready
+rematerialization, EDA, Neo4j/GDS feature export, all canonical modeling stages,
+strict final validation, and readiness reporting, use:
+
+```bash
+set -a
+source /secure/path/pring-five-cyp.env
+set +a
+export NEO4J_PASSWORD='<injected-secret>'
+
+sbatch --export=ALL examples/hpc/04_full_cyp450_pipeline.sbatch
+```
+
+See [`examples/hpc/README_FULL_PIPELINE.md`](examples/hpc/README_FULL_PIPELINE.md)
+for environment preparation, scheduler configuration, output contracts,
+scientific safeguards, and a bounded smoke-run profile.
+
 ### Load an existing PRING run to Neo4j
 
 ```bash
