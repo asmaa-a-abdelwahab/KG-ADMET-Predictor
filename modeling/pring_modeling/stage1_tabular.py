@@ -431,6 +431,30 @@ def run(args: argparse.Namespace) -> dict:
             return _write_empty_summary(args, stage_dir, train_file, candidate_file, out_dir, report_dir, "no_leakage_safe_features_found", excluded_columns)
 
         y = supervised["_label"].astype(int).reset_index(drop=True)
+        supplied_split_col = next(
+            (
+                c
+                for c in ["split", "data_split", "set", "partition", "stage_use"]
+                if c in supervised.columns
+            ),
+            None,
+        )
+        supplied_split_values = (
+            set(
+                supervised[supplied_split_col]
+                .astype(str)
+                .str.lower()
+                .str.strip()
+            )
+            if supplied_split_col
+            else set()
+        )
+        registered_split_used = bool(
+            {"train", "valid", "test"}.issubset(supplied_split_values)
+            or {"training", "validation", "test"}.issubset(
+                supplied_split_values
+            )
+        )
         train_idx, valid_idx, test_idx = _split_indices(supervised.reset_index(drop=True), y, args)
         X_train, X_valid, X_test = X.iloc[train_idx], X.iloc[valid_idx], X.iloc[test_idx]
         y_train, y_valid, y_test = y.iloc[train_idx], y.iloc[valid_idx], y.iloc[test_idx]
@@ -468,7 +492,40 @@ def run(args: argparse.Namespace) -> dict:
         holdout_pred["decision_threshold"] = float(selected_threshold)
         holdout_pred["model"] = f"stage1_tabular_{args.classifier}_holdout"
         holdout_pred["stage"] = "Stage 1 — Neo4j GDS/tabular baseline"
+        holdout_pred["split"] = "test"
         holdout_eval_predictions_file = write_dataframe_if_not_empty(holdout_pred, out_dir / "holdout_eval_predictions.csv")
+
+        validation_pred = supervised.iloc[valid_idx].copy().reset_index(drop=True)
+        validation_pred["score"] = valid_score
+        validation_pred["predicted_label"] = (
+            valid_score >= selected_threshold
+        ).astype(int)
+        validation_pred["decision_threshold"] = float(selected_threshold)
+        validation_pred["model"] = f"stage1_tabular_{args.classifier}"
+        validation_pred["stage"] = "Stage 1 — Neo4j GDS/tabular baseline"
+        validation_pred["split"] = "valid"
+        validation_pred["split_is_diagnostic"] = not registered_split_used
+        validation_pred["split_origin"] = (
+            "supplied_split_registry"
+            if registered_split_used
+            else "generated_component_split"
+        )
+        test_eval_pred = holdout_pred.copy()
+        test_eval_pred["model"] = f"stage1_tabular_{args.classifier}"
+        test_eval_pred["split_is_diagnostic"] = not registered_split_used
+        test_eval_pred["split_origin"] = (
+            "supplied_split_registry"
+            if registered_split_used
+            else "generated_component_split"
+        )
+        stacking_eval = pd.concat(
+            [validation_pred, test_eval_pred],
+            ignore_index=True,
+        )
+        stacking_eval_predictions_file = write_dataframe_if_not_empty(
+            stacking_eval,
+            out_dir / "stacking_eval_predictions.csv",
+        )
         per_target = per_group_binary_metrics(
             holdout_pred,
             y_test.to_numpy(),
@@ -549,7 +606,11 @@ def run(args: argparse.Namespace) -> dict:
         summary = {
             "stage": "Stage 1 — Neo4j GDS/tabular baseline",
             "model": f"stage1_tabular_{args.classifier}",
-            "status": "trained_with_leakage_warning" if leakage_risk else "trained",
+            "status": (
+                "diagnostic_only"
+                if not registered_split_used
+                else ("trained_with_leakage_warning" if leakage_risk else "trained")
+            ),
             "stage_dir": str(stage_dir),
             "training_file": str(train_file),
             "candidate_file": str(candidate_file) if candidate_file else None,
@@ -567,6 +628,7 @@ def run(args: argparse.Namespace) -> dict:
             "leakage_warning": "Metrics are not publishable if feature_policy=allow_all because evidence/outcome columns are used." if leakage_risk else None,
             "group_split": bool(args.group_split),
             "group_column": args.group_column if args.group_split else None,
+            "registered_split_used": registered_split_used,
             "selected_threshold": float(selected_threshold),
             "threshold_selection_partition": "validation",
             "threshold_selection": args.threshold_selection,
@@ -576,6 +638,7 @@ def run(args: argparse.Namespace) -> dict:
             "predictions_file": str(pred_path),
             "eval_predictions_file": str(out_dir / "eval_predictions.csv") if (out_dir / "eval_predictions.csv").exists() else None,
             "holdout_eval_predictions_file": holdout_eval_predictions_file,
+            "stacking_eval_predictions_file": stacking_eval_predictions_file,
             "per_target_metrics_file": per_target_metrics_file,
             "feature_importance_file": feature_importance_file,
             "metrics": metrics,

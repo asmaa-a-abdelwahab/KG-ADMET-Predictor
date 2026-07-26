@@ -52,7 +52,7 @@ services:
         condition: service_healthy
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       PRING_SCHEMA_DOT: "${PRING_SCHEMA_DOT:-}"
       NEO4J_URI: "bolt://neo4j:7687"
@@ -66,7 +66,7 @@ services:
       PRING_ALLOW_NETWORK: "${PRING_ALLOW_NETWORK:-false}"
     volumes:
       - ${PRING_RUNS_DIR:-./runs}:/runs
-      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/load_pring_run.sh"]
 
@@ -81,7 +81,7 @@ services:
         condition: service_healthy
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
       MODEL_REPORT_DIR: "${MODEL_REPORT_DIR:-/reports/modeling}"
@@ -95,7 +95,7 @@ services:
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
       # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
       - ${PRING_RUNS_DIR:-./runs}:/runs:ro
-      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
       - ./artifacts/models:/models
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/run_modeling.sh"]
@@ -128,17 +128,18 @@ services:
       PREDICTION_PERSIST_NEW_SCORES: "${PREDICTION_PERSIST_NEW_SCORES:-true}"
       PREDICTION_REQUIRE_CACHE_WRITE: "${PREDICTION_REQUIRE_CACHE_WRITE:-true}"
       PREDICTION_PARITY_REQUIRED: "${PREDICTION_PARITY_REQUIRED:-true}"
-      PREDICTION_PARITY_SAMPLE_SIZE: "${PREDICTION_PARITY_SAMPLE_SIZE:-5}"
-      PREDICTION_PARITY_MAE_MAX: "${PREDICTION_PARITY_MAE_MAX:-0.05}"
-      PREDICTION_PARITY_MAX_ABS_ERROR: "${PREDICTION_PARITY_MAX_ABS_ERROR:-0.15}"
-      PREDICTION_PARITY_SPEARMAN_MIN: "${PREDICTION_PARITY_SPEARMAN_MIN:-0.90}"
-      PREDICTION_PARITY_DECISION_AGREEMENT_MIN: "${PREDICTION_PARITY_DECISION_AGREEMENT_MIN:-0.95}"
+      PREDICTION_PARITY_SAMPLE_SIZE: "${PREDICTION_PARITY_SAMPLE_SIZE:-200}"
+      PREDICTION_PARITY_MAE_MAX: "${PREDICTION_PARITY_MAE_MAX:-0.01}"
+      PREDICTION_PARITY_MAX_ABS_ERROR: "${PREDICTION_PARITY_MAX_ABS_ERROR:-0.05}"
+      PREDICTION_PARITY_SPEARMAN_MIN: "${PREDICTION_PARITY_SPEARMAN_MIN:-0.99}"
+      PREDICTION_PARITY_DECISION_AGREEMENT_MIN: "${PREDICTION_PARITY_DECISION_AGREEMENT_MIN:-0.995}"
       PREDICTION_TARGET_BACKGROUND_MIN_ROWS: "${PREDICTION_TARGET_BACKGROUND_MIN_ROWS:-20}"
       PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT: "${PREDICTION_LOCAL_IMPORTANCE_MIN_EFFECT:-0.01}"
       PRING_GRAPH_VERSION: "${PRING_GRAPH_VERSION:-unknown_graph_snapshot}"
       PREDICTION_ALLOW_STALE_CACHE: "${PREDICTION_ALLOW_STALE_CACHE:-false}"
       PREDICTION_ALLOW_RUNTIME_MISMATCH: "${PREDICTION_ALLOW_RUNTIME_MISMATCH:-false}"
       PREDICTION_REQUIRE_VERIFIED_ARTIFACTS: "${PREDICTION_REQUIRE_VERIFIED_ARTIFACTS:-false}"
+      PREDICTION_REQUIRE_PUBLISHABLE_ARTIFACTS: "${PREDICTION_REQUIRE_PUBLISHABLE_ARTIFACTS:-false}"
       PREDICTION_API_KEY: "${PREDICTION_API_KEY:-}"
       PREDICTION_DEBUG_ERRORS: "${PREDICTION_DEBUG_ERRORS:-false}"
       PREDICTION_DEVICE: "${PREDICTION_DEVICE:-cpu}"
@@ -173,7 +174,7 @@ services:
       - ./artifacts/models:/models:ro
       - ./artifacts/results:/results
       - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:ro
-    command: ["python", "-m", "uvicorn", "pring_modeling.prediction_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    command: ["/opt/kg/start_prediction_api.sh"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=5)"]
       interval: 15s
@@ -196,7 +197,7 @@ services:
       - "${PRING_BIND_ADDRESS:-127.0.0.1}:${STREAMLIT_PORT:-8501}:8501"
     environment:
       PRING_PACKAGE_DIR: "${PRING_PACKAGE_DIR:-/workspace/pring}"
-      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip}"
+      PRING_PACKAGE_SPEC: "${PRING_PACKAGE_SPEC:-}"
       PRING_RUN_DIR: "${PRING_RUN_DIR:-/runs/current}"
       MODEL_OUTPUT_DIR: "${MODEL_OUTPUT_DIR:-/models}"
       EDA_REPORT_DIR: "${EDA_REPORT_DIR:-/reports}"
@@ -211,7 +212,7 @@ services:
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
       # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
       - ${PRING_RUNS_DIR:-./runs}:/runs:ro
-      - ${PRING_PROJECT_DIR:-./pring}:/workspace/pring:ro
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
       - ./artifacts/models:/models:ro
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/start_streamlit.sh"]

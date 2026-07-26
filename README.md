@@ -86,13 +86,15 @@ Edit `.env` and set:
 PRING_RUNS_DIR=./runs
 PRING_RUN_DIR=/runs/current
 PRING_PROJECT_DIR=../PRING-PACKAGE
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
+# Optional only when a local clone cannot be mounted; replace <commit>:
+PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/<commit>.zip
 ```
 
 `PRING_PROJECT_DIR` should point to a local PRING-PACKAGE clone, for example
 `A:/Repositories/PRING-PACKAGE` on Windows. If that folder is missing or does
-not contain `pyproject.toml`, the containers install the package from
-`PRING_PACKAGE_SPEC`. The Python import and CLI intentionally remain `pring`.
+not contain `pyproject.toml`, set `PRING_PACKAGE_SPEC` to an immutable commit/tag
+archive or released wheel. Mutable branch archives are rejected. The Python
+import and CLI intentionally remain `pring`.
 
 ### 2.2 Start Neo4j and the app
 
@@ -295,9 +297,9 @@ PRING_PROJECT_DIR=/absolute/path/to/pring/package/root
 or:
 
 ```dotenv
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
+PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/<commit>.zip
 # or, with git installed in the image:
-# PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE.git
+# PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE.git@<commit>
 ```
 
 ### Model is not trained

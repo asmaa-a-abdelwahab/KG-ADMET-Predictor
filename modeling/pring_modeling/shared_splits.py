@@ -16,7 +16,7 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 
 
 def _read_csv(path: Path, nrows: int | None = None) -> pd.DataFrame:
@@ -89,6 +89,12 @@ def _target_key(df: pd.DataFrame) -> pd.Series | None:
 
 def _scaffold_or_group_key(df: pd.DataFrame, compound: pd.Series, strategy: str) -> pd.Series:
     strategy = strategy.lower()
+    registered_col = _first_existing(df, ["split_group"])
+    if strategy in {"registered", "compound"} and registered_col is not None:
+        registered = df[registered_col].astype("string").str.strip()
+        usable = registered.notna() & registered.ne("") & registered.str.casefold().ne("nan")
+        if usable.any():
+            return registered.where(usable, compound.astype(str)).astype(str)
     if strategy == "pair":
         target = _target_key(df)
         if target is not None:
@@ -101,7 +107,7 @@ def _scaffold_or_group_key(df: pd.DataFrame, compound: pd.Series, strategy: str)
         # The robust fallback keeps whole compounds together. RDKit scaffold
         # generation can be added upstream when SMILES are available.
         return compound.astype(str)
-    source_col = _first_existing(df, ["source_group", "source", "assay_id", "bioassay_id", "reference_id", "pmid", "split_group"])
+    source_col = _first_existing(df, ["source_group", "source", "assay_id", "bioassay_id", "reference_id", "pmid"])
     if strategy in {"source", "assay", "reference"} and source_col is not None:
         return df[source_col].astype(str).fillna(compound.astype(str))
     return compound.astype(str)
@@ -171,35 +177,45 @@ def _make_split(labels: pd.Series, groups: pd.Series, *, seed: int, test_size: f
     idx = np.arange(n)
     split = pd.Series("train", index=np.arange(n), dtype=object)
 
-    use_group = groups.nunique() > 1 and groups.nunique() < n
+    if n < 3:
+        raise ValueError("At least three labeled rows are required for train/valid/test splitting.")
+    if test_size <= 0 or valid_size <= 0 or test_size + valid_size >= 1:
+        raise ValueError("test_size and valid_size must be positive and sum to less than one.")
+    if groups.isna().any() or groups.astype(str).str.strip().eq("").any():
+        raise ValueError("Split groups must be non-empty for every supervised row.")
+    if groups.nunique() < 3:
+        raise ValueError(
+            "At least three independent split groups are required; row-level fallback is prohibited."
+        )
+
     try:
-        if use_group:
-            gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-            train_valid_idx, test_idx = next(gss.split(idx, labels, groups=groups))
-            split.iloc[test_idx] = "test"
-            remaining_groups = groups.iloc[train_valid_idx]
-            relative_valid = valid_size / max(1e-9, 1.0 - test_size)
-            gss2 = GroupShuffleSplit(n_splits=1, test_size=relative_valid, random_state=seed + 1)
-            train_idx_local, valid_idx_local = next(gss2.split(train_valid_idx, labels.iloc[train_valid_idx], groups=remaining_groups))
-            valid_idx = train_valid_idx[valid_idx_local]
-            split.iloc[valid_idx] = "valid"
-        else:
-            stratify = labels if labels.value_counts().min() >= 2 else None
-            train_valid_idx, test_idx = train_test_split(idx, test_size=test_size, random_state=seed, stratify=stratify)
-            split.iloc[test_idx] = "test"
-            rem_labels = labels.iloc[train_valid_idx]
-            rem_stratify = rem_labels if rem_labels.value_counts().min() >= 2 else None
-            relative_valid = valid_size / max(1e-9, 1.0 - test_size)
-            train_idx, valid_idx = train_test_split(train_valid_idx, test_size=relative_valid, random_state=seed + 1, stratify=rem_stratify)
-            split.iloc[valid_idx] = "valid"
-    except Exception:
-        # Safe deterministic fallback if stratified/group splitting is impossible.
-        rng = np.random.default_rng(seed)
-        perm = rng.permutation(idx)
-        n_test = max(1, int(round(n * test_size)))
-        n_valid = max(1, int(round(n * valid_size)))
-        split.iloc[perm[:n_test]] = "test"
-        split.iloc[perm[n_test:n_test + n_valid]] = "valid"
+        gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+        train_valid_idx, test_idx = next(gss.split(idx, labels, groups=groups))
+        split.iloc[test_idx] = "test"
+        remaining_groups = groups.iloc[train_valid_idx]
+        if remaining_groups.nunique() < 2:
+            raise ValueError("Too few independent groups remain for train/validation splitting.")
+        relative_valid = valid_size / max(1e-9, 1.0 - test_size)
+        gss2 = GroupShuffleSplit(n_splits=1, test_size=relative_valid, random_state=seed + 1)
+        _, valid_idx_local = next(
+            gss2.split(
+                train_valid_idx,
+                labels.iloc[train_valid_idx],
+                groups=remaining_groups,
+            )
+        )
+        valid_idx = train_valid_idx[valid_idx_local]
+        split.iloc[valid_idx] = "valid"
+    except Exception as exc:
+        raise ValueError(
+            "Unable to construct the requested group-aware split; row-level fallback is prohibited."
+        ) from exc
+
+    if set(split.unique()) != {"train", "valid", "test"}:
+        raise ValueError("Group-aware split did not produce non-empty train, valid, and test partitions.")
+    group_partition_counts = pd.DataFrame({"group": groups, "split": split}).groupby("group")["split"].nunique()
+    if int(group_partition_counts.max()) != 1:
+        raise RuntimeError("Internal error: a split group crossed partitions.")
     return split
 
 
@@ -350,7 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--source-modeling-dir", required=True, type=Path)
     prep.add_argument("--output-dir", required=True, type=Path)
     prep.add_argument("--prepared-modeling-dir", required=True, type=Path)
-    prep.add_argument("--strategy", default="compound", choices=["compound", "pair", "scaffold", "source", "assay", "reference"])
+    prep.add_argument(
+        "--strategy",
+        default="registered",
+        choices=["registered", "compound", "pair", "scaffold", "source", "assay", "reference"],
+    )
     prep.add_argument("--seed", type=int, default=42)
     prep.add_argument("--test-size", type=float, default=0.15)
     prep.add_argument("--valid-size", type=float, default=0.15)

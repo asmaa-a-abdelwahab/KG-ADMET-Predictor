@@ -27,11 +27,31 @@ from .model_diagnostics import (
 
 
 PREDICTION_FILENAMES = [
-    "holdout_eval_predictions.csv",
+    "stacking_eval_predictions.csv",
     "supervised_eval_predictions.csv",
+    "holdout_eval_predictions.csv",
     "eval_predictions.csv",
     "predictions.csv",
 ]
+
+DEPLOYABLE_SCORE_COLUMNS = [
+    "score__stage1_tabular_extra_trees",
+    "score__stage3_rgcn_sampled",
+    "score__stage3_hgt_sampled",
+]
+
+
+class FixedMeanEnsemble:
+    """Non-fitted equal-weight combiner for leakage-free score aggregation."""
+
+    def fit(self, _x, _y=None):
+        return self
+
+    def predict_proba(self, x) -> np.ndarray:
+        values = np.asarray(x, dtype=float)
+        probability = np.nanmean(values, axis=1)
+        probability = np.clip(probability, 0.0, 1.0)
+        return np.column_stack([1.0 - probability, probability])
 
 
 def fast_binary_metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float = 0.5) -> dict[str, Any]:
@@ -257,16 +277,47 @@ def _load_one_prediction(path: Path) -> pd.DataFrame | None:
     split_col = _split_col(df)
     if split_col:
         out[f"split__{_safe_name(model_base)}"] = df.loc[keep, split_col].astype(str).to_numpy()
+    if "split_is_diagnostic" in df.columns:
+        out[f"diagnostic__{_safe_name(model_base)}"] = (
+            df.loc[keep, "split_is_diagnostic"]
+            .astype(str)
+            .str.lower()
+            .isin({"true", "1", "yes"})
+            .to_numpy()
+        )
+    if "split_origin" in df.columns:
+        out[f"split_origin__{_safe_name(model_base)}"] = (
+            df.loc[keep, "split_origin"].astype(str).to_numpy()
+        )
     scaffold_col = _scaffold_col(df)
     if scaffold_col:
         out["scaffold_key"] = df.loc[keep, scaffold_col].astype(str).to_numpy()
     source_col = _source_group_col(df)
     if source_col:
         out["source_group_key"] = df.loc[keep, source_col].astype(str).to_numpy()
-    # When multiple rows for a pair appear, keep the mean score and first metadata values.
+    label_conflicts = out.groupby("pair_key")["label"].nunique()
+    if (label_conflicts > 1).any():
+        raise ValueError(
+            f"{path} assigns conflicting labels to the same compound-target pair."
+        )
+    split_columns = [c for c in out.columns if c.startswith("split__")]
+    for column in split_columns:
+        split_conflicts = out.groupby("pair_key")[column].nunique()
+        if (split_conflicts > 1).any():
+            raise ValueError(
+                f"{path} assigns conflicting {column} values to the same pair."
+            )
+
+    # When repeated predictions for a pair exist, average scores only after
+    # validating that labels and registered partitions agree.
     agg: dict[str, Any] = {score_name: "mean", "compound_key": "first", "target_key": "first", "label": "first"}
     for c in out.columns:
-        if c.startswith("split__") or c in {"scaffold_key", "source_group_key"}:
+        if (
+            c.startswith("split__")
+            or c.startswith("diagnostic__")
+            or c.startswith("split_origin__")
+            or c in {"scaffold_key", "source_group_key"}
+        ):
             agg[c] = "first"
     return out.groupby("pair_key", as_index=False).agg(agg)
 
@@ -279,11 +330,27 @@ def load_prediction_frame(prediction_files: list[str | Path], min_model_scores: 
             frames.append(one)
     if not frames:
         raise ValueError("No labelled prediction files with compound/target/label/score columns were found.")
-    base = ["pair_key", "compound_key", "target_key", "label"]
+    pair_identity = ["pair_key", "compound_key", "target_key"]
+    label_registry = pd.concat(
+        [frame[pair_identity + ["label"]] for frame in frames],
+        ignore_index=True,
+    )
+    conflicting_labels = label_registry.groupby("pair_key")["label"].nunique()
+    if (conflicting_labels > 1).any():
+        examples = conflicting_labels[conflicting_labels > 1].index[:5].tolist()
+        raise ValueError(
+            "Base prediction files disagree on labels for the same pair; "
+            f"examples: {examples}"
+        )
+
     merged = frames[0]
     for frame in frames[1:]:
-        meta_cols = [c for c in frame.columns if c not in base and not c.startswith("score__")]
-        merged = merged.merge(frame, on=base, how="outer", suffixes=("", "_dup"))
+        merged = merged.merge(
+            frame,
+            on=pair_identity,
+            how="outer",
+            suffixes=("", "_dup"),
+        )
         for col in [c for c in merged.columns if c.endswith("_dup")]:
             orig = col[:-4]
             if orig in merged.columns:
@@ -302,6 +369,8 @@ def load_prediction_frame(prediction_files: list[str | Path], min_model_scores: 
 
 def _make_classifier(name: str, seed: int, n_jobs: int) -> Pipeline:
     name = str(name or "extra_trees").lower()
+    if name == "fixed_mean":
+        return FixedMeanEnsemble()  # type: ignore[return-value]
     if name == "logistic_regression":
         return Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
@@ -358,15 +427,47 @@ def _infer_supplied_split(frame: pd.DataFrame) -> tuple[pd.Series | None, dict[s
 
 def _assign_split(frame: pd.DataFrame, args: argparse.Namespace, seed: int) -> tuple[pd.Series, dict[str, Any]]:
     supplied, supplied_audit = _infer_supplied_split(frame)
+    diagnostic_columns = [
+        c for c in frame.columns if c.startswith("diagnostic__")
+    ]
+    diagnostic_sources = {
+        column: int(
+            frame[column]
+            .astype(str)
+            .str.lower()
+            .isin({"true", "1", "yes"})
+            .sum()
+        )
+        for column in diagnostic_columns
+    }
+    diagnostic_sources = {
+        column: count for column, count in diagnostic_sources.items() if count
+    }
     audit: dict[str, Any] = {
         "supplied_split_found": supplied is not None,
         "split_strategy": args.split_strategy,
+        "diagnostic_component_rows": diagnostic_sources,
         **supplied_audit,
     }
+    if diagnostic_sources and args.strict_leakage_free:
+        raise ValueError(
+            "Strict leakage-free mode rejects component scores generated from "
+            f"unregistered diagnostic splits: {diagnostic_sources}"
+        )
     supplied_complete = supplied is not None and not supplied.astype(str).eq("unknown").any()
-    if supplied_complete and {"train", "test"}.issubset(set(supplied.astype(str))):
+    required_partitions = (
+        {"valid", "test"}
+        if args.meta_classifier == "fixed_mean"
+        else {"train", "test"}
+    )
+    if supplied_complete and required_partitions.issubset(set(supplied.astype(str))):
         split = supplied.copy()
         if "valid" not in set(split):
+            if args.strict_leakage_free:
+                raise ValueError(
+                    "Strict leakage-free mode requires an explicit validation partition; "
+                    "it will not derive validation rows from registered training scores."
+                )
             train_idx = np.where(split == "train")[0]
             train_frame = frame.iloc[train_idx]
             if train_frame["compound_key"].nunique() > 1:
@@ -395,6 +496,37 @@ def _assign_split(frame: pd.DataFrame, args: argparse.Namespace, seed: int) -> t
             split.iloc[val_sub] = "valid"
             split.iloc[tr_sub] = "train"
             audit["valid_created_from_train"] = True
+        partition_frame = pd.DataFrame(
+            {
+                "compound_key": frame["compound_key"].astype(str),
+                "split": split.astype(str),
+            }
+        )
+        compound_overlap = (
+            partition_frame.groupby("compound_key")["split"].nunique() > 1
+        )
+        audit["compound_groups_crossing_partitions"] = int(compound_overlap.sum())
+        if compound_overlap.any():
+            raise ValueError(
+                "Compound groups cross supplied train/validation/test partitions."
+            )
+        if "split_group" in frame.columns:
+            group_overlap = (
+                pd.DataFrame(
+                    {
+                        "split_group": frame["split_group"].astype(str),
+                        "split": split.astype(str),
+                    }
+                )
+                .groupby("split_group")["split"]
+                .nunique()
+                .gt(1)
+            )
+            audit["registered_groups_crossing_partitions"] = int(group_overlap.sum())
+            if group_overlap.any():
+                raise ValueError(
+                    "Registered similarity/split groups cross supplied partitions."
+                )
         audit["diagnostic_split_created"] = False
         return split.reset_index(drop=True), audit
 
@@ -414,6 +546,10 @@ def _assign_split(frame: pd.DataFrame, args: argparse.Namespace, seed: int) -> t
         group_key = frame["source_group_key"].astype(str)
     elif args.split_strategy in {"compound", "scaffold", "source"}:
         group_key = frame["compound_key"].astype(str)
+    elif args.split_strategy == "registered":
+        raise ValueError(
+            "Registered split strategy requires complete supplied split annotations."
+        )
     audit["diagnostic_split_created"] = True
     audit["diagnostic_split_warning"] = "No explicit split was found in the prediction files; generated a diagnostic split over already-generated predictions. Prefer out-of-fold base predictions for final publishable ensemble metrics."
     if group_key is not None and group_key.nunique() > 2:
@@ -594,7 +730,111 @@ def _external_validation(external_path: str | None, pred: pd.DataFrame, threshol
     if joined.empty or joined["external_label"].nunique() < 2:
         return {"status": "skipped", "reason": "no_overlap_or_single_class", "external_rows": int(len(ext)), "overlap_rows": int(len(joined))}
     m = fast_binary_metrics(joined["external_label"].astype(int).to_numpy(), joined["calibrated_score"].to_numpy(dtype=float), threshold=threshold)
-    return {"status": "computed", "path": str(path), "external_rows": int(len(ext)), "overlap_rows": int(len(joined)), "metrics": m, **m}
+    return {
+        "status": "computed_overlap_reassessment",
+        "path": str(path),
+        "external_rows": int(len(ext)),
+        "overlap_rows": int(len(joined)),
+        "validation_design": "external_labels_joined_to_already_scored_pair_overlap",
+        "independent_transport_validation": False,
+        "qualification": (
+            "This reassesses labels for already-scored overlapping pairs; it is "
+            "not an independent prospective or transport validation cohort."
+        ),
+        "metrics": m,
+        **m,
+    }
+
+
+def _group_bootstrap_intervals(
+    frame: pd.DataFrame,
+    *,
+    score_column: str,
+    threshold: float,
+    group_column: str,
+    n_resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Estimate uncertainty by resampling compound groups, not individual rows."""
+    if n_resamples <= 0 or frame.empty:
+        return {
+            "status": "disabled",
+            "method": "compound_group_bootstrap",
+            "resamples_requested": int(n_resamples),
+        }
+    groups = frame[group_column].astype(str)
+    unique_groups = groups.drop_duplicates().to_numpy()
+    if len(unique_groups) < 2:
+        return {
+            "status": "unavailable",
+            "method": "compound_group_bootstrap",
+            "reason": "fewer_than_two_compound_groups",
+        }
+    group_indices = {
+        group: np.flatnonzero(groups.to_numpy() == group)
+        for group in unique_groups
+    }
+    rng = np.random.default_rng(seed)
+    metric_names = [
+        "roc_auc",
+        "average_precision",
+        "mcc",
+        "balanced_accuracy",
+        "specificity",
+        "recall",
+        "precision",
+        "f1",
+    ]
+    samples: dict[str, list[float]] = {name: [] for name in metric_names}
+    brier_samples: list[float] = []
+    completed = 0
+    y_all = frame["label"].to_numpy(dtype=int)
+    score_all = frame[score_column].to_numpy(dtype=float)
+    for _ in range(int(n_resamples)):
+        selected_groups = rng.choice(
+            unique_groups,
+            size=len(unique_groups),
+            replace=True,
+        )
+        selected_indices = np.concatenate(
+            [group_indices[group] for group in selected_groups]
+        )
+        y = y_all[selected_indices]
+        score = score_all[selected_indices]
+        if np.unique(y).size < 2:
+            continue
+        result = fast_binary_metrics(y, score, threshold=threshold)
+        for name in metric_names:
+            value = result.get(name)
+            if value is not None and np.isfinite(float(value)):
+                samples[name].append(float(value))
+        brier_samples.append(float(np.mean((score - y) ** 2)))
+        completed += 1
+
+    def interval(values: list[float]) -> dict[str, float | int | None]:
+        if not values:
+            return {"lower": None, "upper": None, "median": None, "n": 0}
+        array = np.asarray(values, dtype=float)
+        return {
+            "lower": float(np.quantile(array, 0.025)),
+            "upper": float(np.quantile(array, 0.975)),
+            "median": float(np.quantile(array, 0.5)),
+            "n": int(len(array)),
+        }
+
+    return {
+        "status": "computed" if completed else "unavailable",
+        "method": "compound_group_bootstrap",
+        "confidence_level": 0.95,
+        "resamples_requested": int(n_resamples),
+        "resamples_completed": int(completed),
+        "group_column": group_column,
+        "group_count": int(len(unique_groups)),
+        "intervals": {
+            **{name: interval(values) for name, values in samples.items()},
+            "brier_score": interval(brier_samples),
+        },
+    }
 
 
 def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse.Namespace, seed: int, seed_dir: Path) -> dict[str, Any]:
@@ -602,7 +842,36 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     frame = base_frame.copy()
     split, split_audit = _assign_split(frame, args, seed)
     frame["final_split"] = split.to_numpy()
-    is_diagnostic_split = bool(split_audit.get("diagnostic_split_created"))
+    if args.strict_leakage_free and args.meta_classifier != "fixed_mean":
+        train_mask = frame["final_split"].astype(str).eq("train")
+        non_oof_train_rows: dict[str, int] = {}
+        for score_column in score_cols:
+            split_column = score_column.replace("score__", "split__", 1)
+            if split_column not in frame.columns:
+                non_oof_train_rows[split_column] = int(train_mask.sum())
+                continue
+            raw = frame.loc[train_mask, split_column].astype(str).str.lower().str.strip()
+            not_oof = ~raw.str.contains(
+                r"oof|out[_ -]?of[_ -]?fold",
+                regex=True,
+            )
+            non_oof_train_rows[split_column] = int(not_oof.sum())
+        non_oof_train_rows = {
+            column: count for column, count in non_oof_train_rows.items() if count
+        }
+        split_audit["non_oof_meta_training_rows"] = non_oof_train_rows
+        split_audit["base_score_protocol"] = (
+            "out_of_fold_within_registered_training_partition"
+        )
+        if non_oof_train_rows:
+            raise ValueError(
+                "Strict stacking requires out-of-fold base predictions for every "
+                f"meta-training row: {non_oof_train_rows}"
+            )
+    is_diagnostic_split = bool(
+        split_audit.get("diagnostic_split_created")
+        or split_audit.get("diagnostic_component_rows")
+    )
     frame["split_origin"] = (
         "generated_from_already_scored_predictions"
         if is_diagnostic_split
@@ -612,11 +881,18 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     train = frame[frame["final_split"] == "train"].reset_index(drop=True)
     valid = frame[frame["final_split"] == "valid"].reset_index(drop=True)
     test = frame[frame["final_split"] == "test"].reset_index(drop=True)
-    if min(train["label"].nunique(), valid["label"].nunique(), test["label"].nunique()) < 2:
-        raise ValueError("Train/valid/test split must each contain both classes for finalized evaluation.")
+    required_frames = [valid, test] if args.meta_classifier == "fixed_mean" else [train, valid, test]
+    if any(part.empty or part["label"].nunique() < 2 for part in required_frames):
+        required_names = "validation/test" if args.meta_classifier == "fixed_mean" else "train/validation/test"
+        raise ValueError(f"{required_names} partitions must each contain both classes for finalized evaluation.")
 
     model = _make_classifier(args.meta_classifier, seed, args.n_jobs)
-    model.fit(train[score_cols], train["label"].astype(int).to_numpy())
+    if args.meta_classifier != "fixed_mean":
+        model.fit(train[score_cols], train["label"].astype(int).to_numpy())
+    else:
+        split_audit["base_score_protocol"] = (
+            "fixed_equal_weight_combiner_selected_before_test_no_meta_training"
+        )
     valid_score_raw = model.predict_proba(valid[score_cols])[:, 1]
     calibrator = _fit_calibrator(args.calibration, valid["label"].to_numpy(), valid_score_raw)
     valid_score = _apply_calibrator(calibrator, valid_score_raw)
@@ -632,6 +908,16 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     metrics = fast_binary_metrics(test["label"].to_numpy(), test_score, threshold=threshold)
     brier = float(np.mean((test_score - test["label"].to_numpy(dtype=float)) ** 2))
     ece, cal_bins = expected_calibration_error(test["label"].to_numpy(), test_score, n_bins=args.calibration_bins)
+    test_for_intervals = test.copy()
+    test_for_intervals["calibrated_score"] = test_score
+    confidence_intervals = _group_bootstrap_intervals(
+        test_for_intervals,
+        score_column="calibrated_score",
+        threshold=threshold,
+        group_column="compound_key",
+        n_resamples=args.bootstrap_resamples,
+        seed=seed,
+    )
     operating_points = operating_point_metrics(
         test["label"].to_numpy(),
         test_score,
@@ -668,7 +954,11 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
     write_dataframe_if_not_empty(common_metrics, seed_dir / "common_test_model_metrics.csv")
     per_target = per_group_binary_metrics(pred, pred["label"].to_numpy(), pred["calibrated_score"].to_numpy(), fast_binary_metrics, threshold=threshold, group_col="target_key")
     write_dataframe_if_not_empty(per_target, seed_dir / "per_target_metrics.csv")
-    per_target_meta = _per_target_meta_models(frame, score_cols, args)
+    per_target_meta = (
+        pd.DataFrame()
+        if args.meta_classifier == "fixed_mean"
+        else _per_target_meta_models(frame, score_cols, args)
+    )
     write_dataframe_if_not_empty(per_target_meta, seed_dir / "per_target_ensemble_metrics.csv")
     topk = pred.groupby("target_key", group_keys=False).head(args.top_k_per_target).copy()
     topk.to_csv(seed_dir / "top_k_by_target.csv", index=False)
@@ -681,6 +971,7 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
         "model": f"finalized_ensemble_{args.meta_classifier}",
         "status": "diagnostic_only" if is_diagnostic_split else "trained",
         "publishable": not is_diagnostic_split,
+        "combiner_protocol": split_audit.get("base_score_protocol"),
         "seed": int(seed),
         "score_columns": score_cols,
         "class_distribution": {
@@ -700,6 +991,7 @@ def run_one_seed(base_frame: pd.DataFrame, score_cols: list[str], args: argparse
         "per_target_ensemble_metrics_file": str(seed_dir / "per_target_ensemble_metrics.csv") if not per_target_meta.empty else None,
         "common_test_model_metrics_file": str(seed_dir / "common_test_model_metrics.csv") if not common_metrics.empty else None,
         "calibration": {"method": args.calibration, "brier_score": brier, "expected_calibration_error": ece, "bins_file": str(seed_dir / "calibration_bins.csv")},
+        "confidence_intervals": confidence_intervals,
         "uncertainty": {"method": "base_model_score_std_and_probability_margin", "file": str(seed_dir / "most_uncertain_predictions.csv")},
         "candidate_ranking_file": str(seed_dir / "top_k_by_target.csv"),
         "external_validation": external,
@@ -743,7 +1035,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not files:
         raise ValueError("No prediction files found. Run Stage 1/2/3 first or pass --predictions.")
     frame = load_prediction_frame(files, min_model_scores=args.min_model_scores)
-    score_cols = [c for c in frame.columns if c.startswith("score__")]
+    requested_score_columns = list(args.score_columns or DEPLOYABLE_SCORE_COLUMNS)
+    missing_requested_scores = [
+        column for column in requested_score_columns if column not in frame.columns
+    ]
+    if missing_requested_scores:
+        raise ValueError(
+            "The validated ensemble must use the same deployable component schema "
+            f"as production. Missing component scores: {missing_requested_scores}"
+        )
+    score_cols = requested_score_columns
     if len(score_cols) < args.min_model_scores:
         raise ValueError(f"Need at least {args.min_model_scores} model score columns; found {len(score_cols)}")
     if args.strict_leakage_free:
@@ -770,12 +1071,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             else -999
         ),
     )
-    publishable = all(bool(summary.get("publishable")) for summary in summaries)
+    provenance: dict[str, Any] = {}
+    if args.provenance_manifest:
+        provenance = json.loads(
+            Path(args.provenance_manifest).read_text(encoding="utf-8")
+        )
+    required_provenance = ("dataset_id", "split_registry_id", "label_policy_id")
+    missing_provenance = [
+        key for key in required_provenance
+        if not str(provenance.get(key) or "").strip()
+    ]
+    scientific_release_blockers = []
+    if not all(bool(summary.get("publishable")) for summary in summaries):
+        scientific_release_blockers.append(
+            "diagnostic split or incomplete base-score protocol"
+        )
+    if missing_provenance:
+        scientific_release_blockers.append(
+            "missing upstream provenance: " + ", ".join(missing_provenance)
+        )
+    publishable = not scientific_release_blockers
     final_summary = {
         "stage": "Finalized V2 — leakage-aware calibrated ensemble",
         "model": f"finalized_ensemble_{args.meta_classifier}",
         "status": "trained" if publishable else "diagnostic_only",
         "publishable": publishable,
+        "scientific_release_blockers": scientific_release_blockers,
+        "dataset_id": provenance.get("dataset_id"),
+        "split_registry_id": provenance.get("split_registry_id"),
+        "label_policy_id": provenance.get("label_policy_id"),
+        "feature_schema_id": provenance.get("feature_schema_id"),
+        "base_score_protocol": best.get("split_audit", {}).get(
+            "base_score_protocol"
+        ),
         "implementation": "improved_v2",
         "input_prediction_files": [str(p) for p in files],
         "score_columns": score_cols,
@@ -790,6 +1118,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "seed_metric_summary_file": str(out_dir / "seed_metric_summary.csv"),
         "metric_summary": seed_summary.to_dict(orient="records"),
         "metrics": best.get("metrics", {}),
+        "confidence_intervals": best.get("confidence_intervals", {}),
         **{k: best.get("metrics", {}).get(k) for k in ["mcc", "balanced_accuracy", "roc_auc", "average_precision", "specificity", "negative_precision", "accuracy", "f1", "precision", "recall"]},
     }
     save_json(final_summary, out_dir / "metrics.json")
@@ -801,10 +1130,41 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--outputs-root", default=None, help="Root directory containing Stage 1/2/3 model outputs.")
     p.add_argument("--predictions", nargs="*", default=[], help="Explicit labelled prediction files to merge.")
     p.add_argument("--output-dir", required=True)
-    p.add_argument("--meta-classifier", choices=["extra_trees", "hist_gradient_boosting", "random_forest", "logistic_regression"], default="extra_trees")
+    p.add_argument(
+        "--meta-classifier",
+        choices=[
+            "fixed_mean",
+            "extra_trees",
+            "hist_gradient_boosting",
+            "random_forest",
+            "logistic_regression",
+        ],
+        default="fixed_mean",
+    )
     p.add_argument("--min-model-scores", type=int, default=2)
-    p.add_argument("--strict-leakage-free", action="store_true", help="Fail if supplied train/valid/test split annotations are absent.")
-    p.add_argument("--split-strategy", choices=["random", "compound", "scaffold", "source"], default="compound")
+    p.add_argument(
+        "--score-columns",
+        nargs="*",
+        default=list(DEPLOYABLE_SCORE_COLUMNS),
+        help=(
+            "Ordered component-score schema. The default exactly matches the "
+            "production live predictor."
+        ),
+    )
+    p.add_argument(
+        "--strict-leakage-free",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Require complete, mutually consistent supplied train/valid/test annotations "
+            "(default: true). Use --no-strict-leakage-free only for diagnostic runs."
+        ),
+    )
+    p.add_argument(
+        "--split-strategy",
+        choices=["registered", "random", "compound", "scaffold", "source"],
+        default="registered",
+    )
     p.add_argument("--test-size", type=float, default=0.20)
     p.add_argument("--valid-size", type=float, default=0.20, help="Validation fraction of the non-test data when creating diagnostic splits.")
     p.add_argument("--threshold-selection", choices=["mcc", "balanced_accuracy", "youden", "f1", "accuracy", "recall", "specificity"], default="mcc")
@@ -816,10 +1176,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--balanced-eval-max-per-class", type=int, default=0)
     p.add_argument("--calibration", choices=["platt", "isotonic", "none"], default="platt")
     p.add_argument("--calibration-bins", type=int, default=10)
+    p.add_argument(
+        "--bootstrap-resamples",
+        type=int,
+        default=1000,
+        help=(
+            "Compound-group bootstrap resamples for 95%% test-metric intervals; "
+            "set to 0 to disable."
+        ),
+    )
     p.add_argument("--per-target-min-rows", type=int, default=100)
     p.add_argument("--top-k-per-target", type=int, default=50)
     p.add_argument("--uncertain-top-n", type=int, default=200)
     p.add_argument("--external-labels", default=None, help="Optional external validation CSV with compound, target, and label columns.")
+    p.add_argument(
+        "--provenance-manifest",
+        default=None,
+        help=(
+            "Validated PRING-PACKAGE/modeling manifest containing dataset_id, "
+            "split_registry_id, and label_policy_id. Missing provenance makes "
+            "the final result diagnostic-only."
+        ),
+    )
     p.add_argument("--seeds", default="42", help="Space- or comma-separated seeds for repeated finalized ensemble evaluation.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--n-jobs", type=int, default=1)

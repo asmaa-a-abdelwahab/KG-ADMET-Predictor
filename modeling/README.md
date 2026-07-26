@@ -8,10 +8,10 @@ This folder contains three selectable modeling implementations:
   calibrated probabilities, uncertainty outputs, per-target diagnostics, candidate
   ranking, external-validation hooks, and production-serving modules.
 
-The active `modeling/pring_modeling` package and
-`implementations/improved_v2/pring_modeling` are kept synchronized. Selection
-scripts no longer delete or replace source trees with symlinks; wrappers select
-an implementation through `PYTHONPATH`.
+The active `modeling/pring_modeling` package is the single canonical V2 source
+used by both serving and `MODEL_IMPL=improved_v2` training. The implementation
+folders are historical comparison snapshots. Selection scripts no longer delete
+or replace source trees with symlinks.
 
 Select an implementation by setting `MODEL_IMPL`:
 
@@ -49,15 +49,23 @@ MODEL_PRIMARY_COMPARE_METRIC=mcc \
 MODEL_MIN_SPECIFICITY=0.50 \
 MODEL_STAGE2_SCORE_BATCH_SIZE=65536 \
 MODEL_FINAL_SEEDS="1 2 3 4 5" \
-MODEL_FINAL_SPLIT_STRATEGY=compound \
+MODEL_FINAL_META_CLASSIFIER=fixed_mean \
+MODEL_FINAL_SPLIT_STRATEGY=registered \
 MODEL_FINAL_CALIBRATION=platt \
+MODEL_FINAL_BOOTSTRAP_RESAMPLES=1000 \
+MODEL_FINAL_STRICT_LEAKAGE_FREE=true \
+MODEL_PROVENANCE_MANIFEST=/path/to/PRING-PACKAGE/run/graph/ml/modeling/modeling_stage_manifest.json \
 sbatch modeling/scripts/run_all_models_compare_hpc.sh
 ```
 
-For a potentially publishable final ensemble, every base score must be produced
-out-of-fold under the same registered outer split (or a defensible nested-CV
-design). Merely re-splitting held-out base predictions is diagnostic only. Use
-the strict guard:
+The default final combiner is a fixed, equal-weight mean selected before test
+evaluation. It requires every component to export scores for the same registered
+validation and untouched-test pairs, fits calibration and thresholding on
+validation only, and does not train a meta-model. If a learned stacking
+classifier is selected instead, every training-row base score must be produced
+out of fold under the same registered outer split (or a defensible nested-CV
+design). Merely re-splitting held-out base predictions is diagnostic only. The
+recommended command above enables the strict guard:
 
 ```bash
 MODEL_FINAL_STRICT_LEAKAGE_FREE=true
@@ -70,7 +78,10 @@ After Stage 1/2/3 have finished, rerun only final validation:
 ```bash
 MODEL_IMPL=improved_v2 \
 MODEL_FINAL_SEEDS="1 2 3 4 5" \
-MODEL_FINAL_SPLIT_STRATEGY=compound \
+MODEL_FINAL_META_CLASSIFIER=fixed_mean \
+MODEL_FINAL_SPLIT_STRATEGY=registered \
+MODEL_FINAL_STRICT_LEAKAGE_FREE=true \
+MODEL_PROVENANCE_MANIFEST=/path/to/PRING-PACKAGE/run/graph/ml/modeling/modeling_stage_manifest.json \
 sbatch modeling/scripts/run_final_validation_hpc.sh
 ```
 
@@ -88,11 +99,16 @@ models_all_stages_improved_v2/finalized_v2/seed_<N>/top_k_by_target.csv
 models_all_stages_improved_v2/finalized_v2/seed_<N>/most_uncertain_predictions.csv
 ```
 
+Each seed summary includes compound-group bootstrap 95% confidence intervals.
+The external-label hook is explicitly reported as an overlap reassessment and
+must not be described as independent transport validation unless the evaluation
+cohort is genuinely independent and its training/graph overlap audit is zero.
+
 ## HPO plan generation
 
 ```bash
 bash modeling/scripts/use_implementation.sh improved_v2
-PYTHONPATH=modeling/implementations/improved_v2 \
+PYTHONPATH=modeling \
 python -m pring_modeling.hpo_plan \
   --output-dir reports/hpo_plan_improved_v2 \
   --stage all \
@@ -116,7 +132,7 @@ cd /home/asmaaali/PRING-APP
 PROJECT_DIR=/home/asmaaali/PRING-APP \
 MODEL_ROOT=/home/asmaaali/PRING-APP/modeling \
 MODEL_IMPLS="legacy improved improved_v2" \
-MODEL_SHARED_SPLIT_STRATEGY=compound \
+MODEL_SHARED_SPLIT_STRATEGY=registered \
 MODEL_SHARED_SPLIT_SEED=42 \
 MODEL_SHARED_TEST_SIZE=0.15 \
 MODEL_SHARED_VALID_SIZE=0.15 \

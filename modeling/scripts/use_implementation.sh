@@ -6,7 +6,7 @@ fi
 set -euo pipefail
 
 MODEL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMPL="${1:-${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}}"
+IMPL="${1:-${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved_v2}}}"
 
 case "$IMPL" in
   legacy|old) IMPL="legacy" ;;
@@ -29,4 +29,8 @@ echo "Selected PRING modeling implementation: $IMPL"
 echo "Implementation directory: $IMPL_DIR"
 echo "No source files were replaced. Wrappers run the selected implementation through PYTHONPATH."
 echo "For an interactive shell, run:"
-printf "  export PYTHONPATH='%s'\${PYTHONPATH:+:\$PYTHONPATH}\n" "$IMPL_DIR"
+if [ "$IMPL" = "improved_v2" ]; then
+  printf "  export PYTHONPATH='%s'\${PYTHONPATH:+:\$PYTHONPATH}\n" "$MODEL_ROOT"
+else
+  printf "  export PYTHONPATH='%s'\${PYTHONPATH:+:\$PYTHONPATH}\n" "$IMPL_DIR"
+fi

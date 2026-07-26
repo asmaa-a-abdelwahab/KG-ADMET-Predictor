@@ -286,9 +286,9 @@ def run(args: argparse.Namespace) -> dict:
         data = load_heterodata(stage_dir)
         data = _ensure_supervision_edge_type(data)
         node_maps = load_node_maps(stage_dir)
-        train_df, valid_df, test_df = load_pairs(stage_dir, args.seed)
+        train_df, valid_df, test_df, split_audit = load_pairs(stage_dir, args.seed)
         c_tr, p_tr, y_tr, _ = encode_pairs(train_df, node_maps)
-        c_va, p_va, y_va, _ = encode_pairs(valid_df, node_maps)
+        c_va, p_va, y_va, valid_kept = encode_pairs(valid_df, node_maps)
         c_te, p_te, y_te, test_kept = encode_pairs(test_df, node_maps)
 
         train_label_stats_before = label_stats(y_tr)
@@ -378,6 +378,7 @@ def run(args: argparse.Namespace) -> dict:
         model.load_state_dict(ckpt["model_state"])
         best_threshold = float(ckpt.get("best_threshold", best_threshold))
         best_epoch = int(ckpt.get("best_epoch", best_epoch))
+        valid_score, valid_y = _predict(model, valid_loader, device, args.amp)
         test_score, test_y = _predict(model, test_loader, device, args.amp)
         metrics = extended_binary_metrics(test_y.numpy(), test_score.numpy(), threshold=best_threshold)
         operating_points = operating_point_metrics(
@@ -406,6 +407,31 @@ def run(args: argparse.Namespace) -> dict:
         )
         per_target_metrics_file = write_dataframe_if_not_empty(per_target, out_dir / "per_target_metrics.csv")
 
+        validation_eval = valid_kept.copy().reset_index(drop=True)
+        validation_eval["score"] = valid_score.numpy()
+        validation_eval["label"] = valid_y.numpy().astype(int)
+        validation_eval["model"] = "stage3_rgcn_sampled"
+        validation_eval["stage"] = "Stage 3 — sampled R-GCN"
+        validation_eval["split"] = "valid"
+        validation_eval["split_is_diagnostic"] = not split_audit[
+            "registered_split_used"
+        ]
+        validation_eval["split_origin"] = split_audit["split_origin"]
+        test_eval = test_kept.copy().reset_index(drop=True)
+        test_eval["score"] = test_score.numpy()
+        test_eval["label"] = test_y.numpy().astype(int)
+        test_eval["model"] = "stage3_rgcn_sampled"
+        test_eval["stage"] = "Stage 3 — sampled R-GCN"
+        test_eval["split"] = "test"
+        test_eval["split_is_diagnostic"] = not split_audit[
+            "registered_split_used"
+        ]
+        test_eval["split_origin"] = split_audit["split_origin"]
+        pd.concat([validation_eval, test_eval], ignore_index=True).to_csv(
+            out_dir / "supervised_eval_predictions.csv",
+            index=False,
+        )
+
         cand_df = load_candidate_pairs(stage_dir)
         if cand_df is not None and args.score_candidates:
             cand = cand_df.head(args.max_candidate_pairs) if args.max_candidate_pairs > 0 else cand_df
@@ -426,11 +452,18 @@ def run(args: argparse.Namespace) -> dict:
         summary = {
             "stage": "Stage 3 — sampled R-GCN",
             "model": "stage3_rgcn_sampled",
-            "status": "trained",
+            "status": (
+                "trained"
+                if split_audit["registered_split_used"]
+                else "diagnostic_only"
+            ),
             "metrics": metrics,
             **{k: v for k, v in metrics.items()},
             "prediction_rows_written": int(len(preds)),
             "predictions_file": str(out_dir / "predictions.csv"),
+            "evaluation_predictions_file": str(
+                out_dir / "supervised_eval_predictions.csv"
+            ),
             "model_file": str(out_dir / "best_model.pt"),
             "training_history_file": str(out_dir / "training_history.csv"),
             "best_epoch": int(best_epoch),
@@ -445,6 +478,7 @@ def run(args: argparse.Namespace) -> dict:
             "per_target_metrics_file": per_target_metrics_file,
             "class_weights": class_weights,
             "balance_info": balance_info,
+            "split_audit": split_audit,
         }
         if args.export_neo4j:
             summary["neo4j_export"] = export_predictions_dataframe(preds, model_name="stage3_rgcn_sampled", max_rows=args.max_neo4j_predictions)

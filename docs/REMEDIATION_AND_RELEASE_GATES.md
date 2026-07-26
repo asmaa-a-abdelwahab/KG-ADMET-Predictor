@@ -46,7 +46,7 @@ Current preserved artifact audit (2026-07-26):
 | Stage 3 loading | Unscoped raw `HeteroData` is rejected | Legacy use requires `PRING_ALLOW_UNSCOPED_HETERODATA=true` |
 | Evaluation | Thresholds and calibration are fitted on validation data | Test data is evaluated exactly once |
 | Seed selection | Best seed is selected by validation MCC | Test MCC cannot select the reported seed |
-| Stacking | Simple ensemble outputs are marked diagnostic | Publication requires common-split out-of-fold base scores |
+| Ensemble | Fixed equal weights require common registered validation/test scores; learned stacking requires OOF training scores | Validation selects calibration/threshold; test remains untouched |
 | Production bundle | Re-split held-out component predictions are rejected | Override is diagnostic-only and non-publishable |
 | Model artifact integrity | New bundles record a SHA-256 digest and exact Python/scientific-library versions | Production rejects digest mismatch, runtime mismatch, and unverified legacy bundles |
 | Cache isolation | Cache is separate from the immutable reference frame | Cache rows carry `exclude_from_training=true` |

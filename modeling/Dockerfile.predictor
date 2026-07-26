@@ -17,6 +17,7 @@ ARG PYG_WHEEL_URL=https://data.pyg.org/whl/torch-2.5.1+cpu.html
 
 COPY modeling/pring_modeling /opt/kg/pring_modeling
 COPY modeling/scripts/validate_prediction_assets.py /opt/kg/validate_prediction_assets.py
+COPY modeling/scripts/start_prediction_api.sh /opt/kg/start_prediction_api.sh
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install \
@@ -40,16 +41,10 @@ RUN python -m pip install --upgrade pip \
     && python -c "from pring_modeling.pyg_runtime import initialize_pyg_runtime; status=initialize_pyg_runtime(); assert status.ready, f'{status.error_type}: {status.error}'"
 
 RUN useradd --create-home --uid 10001 appuser \
+    && chmod +x /opt/kg/start_prediction_api.sh \
     && chown -R appuser:appuser /opt/kg
 
 USER appuser
 EXPOSE 8000
 
-CMD [
-  "python", "-m", "uvicorn",
-  "pring_modeling.prediction_api:app",
-  "--host", "0.0.0.0",
-  "--port", "8000",
-  "--workers", "1",
-  "--timeout-keep-alive", "10"
-]
+CMD ["/opt/kg/start_prediction_api.sh"]

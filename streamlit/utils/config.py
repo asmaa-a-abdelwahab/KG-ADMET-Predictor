@@ -8,7 +8,10 @@ from pathlib import Path
 # Streamlit app settings kept from the older CYP450-KG implementation.
 PAGE_TITLE = os.getenv("STREAMLIT_PAGE_TITLE", "CYP450-KG Explorer")
 PAGE_ICON = os.getenv("STREAMLIT_PAGE_ICON", "images/kg_icon.webp")
-PRING_REPO_URL = os.getenv("PRING_REPO_URL", "https://github.com/asmaa-a-abdelwahab/PRING")
+PRING_REPO_URL = os.getenv(
+    "PRING_REPO_URL",
+    "https://github.com/asmaa-a-abdelwahab/PRING-APP",
+)
 
 # Neo4j configuration. Defaults match docker-compose service names, but can be
 # overridden when running the older app locally outside Docker.

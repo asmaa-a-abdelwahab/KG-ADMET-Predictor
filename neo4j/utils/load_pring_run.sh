@@ -2,7 +2,6 @@
 set -euo pipefail
 
 /opt/kg/bin/install_pring_runtime.sh
-python -m pip install --no-cache-dir neo4j >/dev/null
 python /opt/kg/bin/check_neo4j.py
 
 RUN_DIR="${PRING_RUN_DIR:-/runs/current}"

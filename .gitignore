@@ -34,7 +34,15 @@ tmp/
 .hpc_scratch/
 artifacts/*
 !artifacts/.gitkeep
+!artifacts/results/
+artifacts/results/*
+!artifacts/results/LEGACY_DIAGNOSTIC_NOTICE.md
+!artifacts/models/
+artifacts/models/*
 !artifacts/models/.gitkeep
+!artifacts/models/production/
+artifacts/models/production/*
+!artifacts/models/production/LEGACY_DIAGNOSTIC_NOTICE.md
 !artifacts/reports/.gitkeep
 !artifacts/neo4j-import/.gitkeep
 

@@ -152,7 +152,9 @@ def _executive_summary_rows(predictions: list[dict[str, Any]]) -> list[dict[str,
                 "target": pair.get("target_name"),
                 "probability": _pct(pred.get("calibrated_probability")),
                 "result": _status_label(str(pred.get("result_status", ""))),
-                "model_certainty": str(uncertainty.get("model_certainty", "N/A")).title(),
+                "heuristic_confidence": str(
+                    uncertainty.get("heuristic_confidence", uncertainty.get("model_certainty", "N/A"))
+                ).title(),
                 "evidence": f"{evidence.get('tier', 'N/A')} / {str(evidence.get('evidence_support', 'N/A')).title()}",
                 "applicability": str(applicability.get("status", "unknown")).replace("_", " ").title(),
             }
@@ -280,7 +282,7 @@ def generate_prediction_report_html(payload: dict[str, Any]) -> str:
               <div class="metric-grid">
                 <div><span>Calibrated probability</span><strong>{_pct(pred.get('calibrated_probability'))}</strong></div>
                 <div><span>Decision threshold</span><strong>{_pct(pred.get('threshold'))}</strong></div>
-                <div><span>Model certainty</span><strong>{_h(str(uncertainty.get('model_certainty', 'N/A')).title())}</strong></div>
+                <div><span>Heuristic confidence</span><strong>{_h(str(uncertainty.get('heuristic_confidence', uncertainty.get('model_certainty', 'N/A'))).title())}</strong></div>
                 <div><span>Evidence support</span><strong>{_h(str(evidence.get('evidence_support', 'N/A')).title())}</strong></div>
                 <div><span>Evidence tier</span><strong>{_h(evidence.get('tier'))}</strong></div>
                 <div><span>Applicability domain</span><strong>{_h(str(applicability.get('status', 'unknown')).replace('_',' ').title())}</strong></div>
@@ -304,6 +306,7 @@ def generate_prediction_report_html(payload: dict[str, Any]) -> str:
               {shap_html}
 
               <h3>Uncertainty and applicability</h3>
+              <p class="muted">The confidence band is a heuristic diagnostic based on threshold margin, component dispersion, and entropy. It is not a validated uncertainty interval.</p>
               <div class="metric-grid compact">
                 <div><span>Decision margin</span><strong>{_num(uncertainty.get('decision_margin'),4)}</strong></div>
                 <div><span>Model disagreement (SD)</span><strong>{_num(uncertainty.get('component_disagreement_std'),4)}</strong></div>
@@ -378,9 +381,10 @@ table{{border-collapse:collapse;width:100%;margin:12px 0 22px}} th,td{{border:1p
 </style></head><body><main class="report">
 <h1>PRING compound-target prediction report</h1>
 <p class="subtitle">Generated {generated}. Calibrated prediction, applicability-domain diagnostics, component explanation, model validation and evidence provenance.</p>
+{validation_qualification if diagnostic_validation else ""}
 <div class="overview"><strong>Requested pairs:</strong> {_h(payload.get('requested_pairs'))} &nbsp; <strong>Successful:</strong> {_h(payload.get('successful_pairs'))} &nbsp; <strong>Known/rediscovered:</strong> {_h(status_counts.get('known_interaction_rediscovered',0))} &nbsp; <strong>Novel predicted:</strong> {_h(status_counts.get('novel_predicted_interaction',0))} &nbsp; <strong>Not predicted:</strong> {_h(status_counts.get('interaction_not_predicted',0))}</div>
 <h2>Executive summary</h2>
-{_table(summary_rows, [('compound','Compound'),('target','Target'),('probability','Probability'),('result','Result'),('model_certainty','Model certainty'),('evidence','Evidence'),('applicability','Applicability')])}
+{_table(summary_rows, [('compound','Compound'),('target','Target'),('probability','Probability'),('result','Result'),('heuristic_confidence','Heuristic confidence'),('evidence','Evidence'),('applicability','Applicability')])}
 <h2>Model and data provenance</h2>
 {_table(provenance_rows, [('field','Field'),('value','Value')])}
 <p><strong>Score sources used in this report:</strong> {_h(json.dumps(source_counts, sort_keys=True))}</p>
@@ -420,7 +424,10 @@ def prediction_summary_dataframe(payload: dict[str, Any]) -> pd.DataFrame:
                 "threshold": pred.get("threshold"),
                 "result_status": pred.get("result_status"),
                 "prediction": pred.get("predicted_class"),
-                "model_certainty": uncertainty.get("model_certainty"),
+                "heuristic_confidence": uncertainty.get(
+                    "heuristic_confidence",
+                    uncertainty.get("model_certainty"),
+                ),
                 "evidence_tier": evidence.get("tier"),
                 "evidence_support": evidence.get("evidence_support"),
                 "known_direct_interaction": evidence.get("known_direct_interaction"),

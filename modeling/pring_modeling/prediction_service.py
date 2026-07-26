@@ -145,6 +145,50 @@ def _verify_artifact_digest(path: Path, manifest: dict[str, Any]) -> dict[str, A
     return {"status": "verified", "expected": expected, "actual": digest}
 
 
+def _scientific_release_status(
+    manifest: dict[str, Any],
+    *,
+    artifact_name: str = "production bundle",
+) -> dict[str, Any]:
+    status = clean_optional_text(manifest.get("status"), "unknown").casefold()
+    publishable = manifest.get("publishable")
+    required_ids = (
+        "dataset_id",
+        "split_registry_id",
+        "feature_schema_id",
+        "label_policy_id",
+    )
+    missing_ids = [name for name in required_ids if not clean_optional_text(manifest.get(name), "")]
+    diagnostic = status in {"diagnostic", "diagnostic_only", "legacy_diagnostic"} or publishable is False
+    ready = status in {"ready", "production_ready"} and publishable is True and not missing_ids
+    return {
+        "artifact": artifact_name,
+        "status": status,
+        "publishable": publishable,
+        "diagnostic": diagnostic,
+        "required_provenance_ids": list(required_ids),
+        "missing_provenance_ids": missing_ids,
+        "ready": ready,
+    }
+
+
+def _require_scientific_release(
+    manifest: dict[str, Any],
+    *,
+    artifact_name: str = "production bundle",
+) -> dict[str, Any]:
+    release = _scientific_release_status(manifest, artifact_name=artifact_name)
+    if not release["ready"]:
+        raise RuntimeError(
+            f"{artifact_name} is not approved for production serving: "
+            f"status={release['status']!r}, publishable={release['publishable']!r}, "
+            f"missing_provenance_ids={release['missing_provenance_ids']}. "
+            "Rebuild and validate a leakage-controlled bundle; diagnostic overrides "
+            "are not accepted by the production prediction service."
+        )
+    return release
+
+
 @dataclass(frozen=True)
 class ResolvedPair:
     compound_input: str
@@ -178,9 +222,18 @@ class PRINGPredictionService:
             raise FileNotFoundError(f"Production manifest not found: {manifest_file}")
 
         self.manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        require_verified_artifacts = _env_flag("PREDICTION_REQUIRE_VERIFIED_ARTIFACTS", False)
+        require_publishable_artifacts = _env_flag(
+            "PREDICTION_REQUIRE_PUBLISHABLE_ARTIFACTS",
+            require_verified_artifacts,
+        )
+        self.scientific_release = (
+            _require_scientific_release(self.manifest)
+            if require_publishable_artifacts
+            else _scientific_release_status(self.manifest)
+        )
         self.artifact_integrity = _verify_artifact_digest(model_file, self.manifest)
         self.runtime_compatibility = _runtime_compatibility(self.manifest)
-        require_verified_artifacts = _env_flag("PREDICTION_REQUIRE_VERIFIED_ARTIFACTS", False)
         if require_verified_artifacts and (
             self.artifact_integrity["status"] != "verified"
             or self.runtime_compatibility["status"] == "unverified_legacy_artifact"
@@ -219,11 +272,24 @@ class PRINGPredictionService:
         if fallback_manifest_file.exists():
             self.fallback_manifest = json.loads(fallback_manifest_file.read_text(encoding="utf-8"))
         if fallback_file.exists():
+            if require_publishable_artifacts:
+                _require_scientific_release(
+                    self.fallback_manifest,
+                    artifact_name="Stage 3 fallback bundle",
+                )
             self.fallback_artifact_integrity = _verify_artifact_digest(
                 fallback_file,
                 self.fallback_manifest,
             )
             fallback_compatibility = _runtime_compatibility(self.fallback_manifest)
+            if require_verified_artifacts and (
+                self.fallback_artifact_integrity["status"] != "verified"
+                or fallback_compatibility["status"] == "unverified_legacy_artifact"
+            ):
+                raise RuntimeError(
+                    "Production serving requires a verified Stage 3 fallback digest "
+                    "and recorded runtime versions."
+                )
             if (
                 fallback_compatibility["status"] == "incompatible"
                 and not _env_flag("PREDICTION_ALLOW_RUNTIME_MISMATCH", False)
@@ -268,11 +334,11 @@ class PRINGPredictionService:
             "PREDICTION_ALLOW_STAGE3_FALLBACK",
             _env_flag("PREDICTION_ALLOW_COMPONENT_FALLBACK", True),
         )
-        self.parity_sample_size = int(os.getenv("PREDICTION_PARITY_SAMPLE_SIZE", "5"))
-        self.parity_mae_max = float(os.getenv("PREDICTION_PARITY_MAE_MAX", "0.05"))
-        self.parity_max_abs_error = float(os.getenv("PREDICTION_PARITY_MAX_ABS_ERROR", "0.15"))
-        self.parity_spearman_min = float(os.getenv("PREDICTION_PARITY_SPEARMAN_MIN", "0.90"))
-        self.parity_decision_agreement_min = float(os.getenv("PREDICTION_PARITY_DECISION_AGREEMENT_MIN", "0.95"))
+        self.parity_sample_size = int(os.getenv("PREDICTION_PARITY_SAMPLE_SIZE", "200"))
+        self.parity_mae_max = float(os.getenv("PREDICTION_PARITY_MAE_MAX", "0.01"))
+        self.parity_max_abs_error = float(os.getenv("PREDICTION_PARITY_MAX_ABS_ERROR", "0.05"))
+        self.parity_spearman_min = float(os.getenv("PREDICTION_PARITY_SPEARMAN_MIN", "0.99"))
+        self.parity_decision_agreement_min = float(os.getenv("PREDICTION_PARITY_DECISION_AGREEMENT_MIN", "0.995"))
         self._parity_lock = threading.RLock()
         self._parity_status: dict[str, Any] = {
             "status": "not_run",
@@ -331,6 +397,7 @@ class PRINGPredictionService:
             "ready": can_serve,
             "hybrid_ready": hybrid_ready,
             "model": self.manifest,
+            "scientific_release": self.scientific_release,
             "artifact_integrity": self.artifact_integrity,
             "runtime_compatibility": self.runtime_compatibility,
             "serving_architecture": "validated_reference_then_separate_prediction_cache_then_parity_guarded_live_inference",
@@ -757,7 +824,7 @@ class PRINGPredictionService:
                 return _json_safe(row)
         return None
 
-    def _model_certainty(self, probability: float, threshold: float, disagreement: float, applicability: dict[str, Any]) -> dict[str, Any]:
+    def _heuristic_confidence(self, probability: float, threshold: float, disagreement: float, applicability: dict[str, Any]) -> dict[str, Any]:
         margin = abs(probability - threshold)
         entropy = _entropy(probability)
         if applicability.get("status") == "outside_domain":
@@ -775,6 +842,8 @@ class PRINGPredictionService:
         return {
             "band": band,
             "reason": reason,
+            "validated_uncertainty_estimate": False,
+            "method": "heuristic_threshold_margin_component_dispersion_entropy",
             "decision_margin": float(margin),
             "component_disagreement_std": float(disagreement),
             "predictive_entropy_bits": float(entropy),
@@ -832,7 +901,7 @@ class PRINGPredictionService:
         applicability = self.reference.applicability(
             pair.target_key, scores, self.minimum_target_background_rows, score_columns=active_columns
         )
-        certainty = self._model_certainty(probability, threshold, disagreement, applicability)
+        certainty = self._heuristic_confidence(probability, threshold, disagreement, applicability)
         result_status, predicted_class = self._result_classification(predicted_label, evidence)
         local = self._local_explanation(pair, scores, probability, variant)
         score_source = clean_optional_text(component_details.get("score_source"), "unknown")
@@ -903,10 +972,12 @@ class PRINGPredictionService:
                         "decision_margin": certainty["decision_margin"],
                         "component_disagreement_std": certainty["component_disagreement_std"],
                         "predictive_entropy_bits": certainty["predictive_entropy_bits"],
-                        "model_certainty": certainty["band"],
-                        "model_certainty_reason": certainty["reason"],
+                        "heuristic_confidence": certainty["band"],
+                        "heuristic_confidence_reason": certainty["reason"],
+                        "validated_uncertainty_estimate": False,
+                        "method": certainty["method"],
                     },
-                    "calibration_metrics_on_frozen_test": {
+                    "calibration_metrics_on_evaluation_partition": {
                         "brier_score": variant_manifest.get("metrics", {}).get("brier_score"),
                         "expected_calibration_error": variant_manifest.get("metrics", {}).get("expected_calibration_error"),
                     },
@@ -920,7 +991,7 @@ class PRINGPredictionService:
                 },
                 "interpretation": {
                     "statement": statement,
-                    "model_certainty": certainty["band"],
+                    "heuristic_confidence": certainty["band"],
                     "evidence_support": evidence.get("evidence_support", "low"),
                     "recommended_action": self._recommended_action(result_status, evidence, certainty),
                     "scope_warning": (

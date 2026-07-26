@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -80,6 +81,7 @@ def test_report_contains_scientific_sections():
     assert "Frozen-test validation" in report
     assert "Scientific limitations" in report
     assert "Novel predicted interaction" in report
+    assert "Heuristic confidence" in report
 
 
 def test_production_bundle_rejects_resplit_heldout_component_scores(tmp_path: Path):
@@ -135,6 +137,69 @@ def test_production_bundle_rejects_compound_overlap_across_partitions(tmp_path: 
         build_production_bundle(frame_path, tmp_path / "production")
 
 
+def test_fixed_mean_production_bundle_preserves_validated_score_contract(tmp_path: Path):
+    import joblib
+    import numpy as np
+
+    from pring_modeling.production_bundle import (
+        DEPLOYABLE_SCORE_COLUMNS,
+        build_production_bundle,
+    )
+
+    rows = []
+    for row_index in range(18):
+        partition = ("train", "valid", "test")[row_index // 6]
+        label = row_index % 2
+        rows.append(
+            {
+                "compound_key": f"C{row_index}",
+                "target_key": f"T{row_index}",
+                "label": label,
+                "final_split": partition,
+                **{
+                    column: (0.75 if label else 0.25) + component_index * 0.02
+                    for component_index, column in enumerate(DEPLOYABLE_SCORE_COLUMNS)
+                },
+                **{
+                    f"split__{column}": (
+                        "train_oof" if partition == "train" else partition
+                    )
+                    for column in DEPLOYABLE_SCORE_COLUMNS
+                },
+            }
+        )
+    frame_path = tmp_path / "registered_scores.csv"
+    pd.DataFrame(rows).to_csv(frame_path, index=False)
+    provenance_path = tmp_path / "provenance.json"
+    provenance_path.write_text(
+        json.dumps(
+            {
+                "dataset_id": "dataset-1",
+                "split_registry_id": "split-1",
+                "label_policy_id": "labels-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "production"
+    manifest = build_production_bundle(
+        frame_path,
+        output_dir,
+        source_metrics=provenance_path,
+    )
+    assert manifest["status"] == "ready"
+    assert manifest["publishable"] is True
+    assert manifest["combiner_protocol"] == "fixed_equal_weight_combiner_no_meta_training"
+    assert manifest["meta_training_rows"] == 0
+    assert manifest["score_columns"] == DEPLOYABLE_SCORE_COLUMNS
+
+    bundle = joblib.load(output_dir / "production_ensemble.joblib")
+    component_scores = np.array([[0.2, 0.5, 0.8]])
+    assert bundle["score_columns"] == DEPLOYABLE_SCORE_COLUMNS
+    assert bundle["model"].predict_proba(component_scores)[0, 1] == pytest.approx(0.5)
+
+
 def test_model_digest_verification_rejects_tampering(tmp_path: Path):
     from pring_modeling.prediction_service import _verify_artifact_digest
 
@@ -171,7 +236,7 @@ def test_stage1_identifier_filter_does_not_drop_scientific_acidic_descriptor():
 
 
 def test_final_validation_rejects_conflicting_component_split_registry():
-    from pring_modeling.final_validation import _infer_supplied_split
+    from pring_modeling.final_validation import _infer_supplied_split, build_parser
 
     frame = pd.DataFrame(
         {
@@ -184,3 +249,71 @@ def test_final_validation_rejects_conflicting_component_split_registry():
     assert split.iloc[0] == "unknown"
     assert split.iloc[1] == "test"
     assert audit["conflicting_rows"] == 1
+    help_text = build_parser().format_help()
+    assert "Compound-group bootstrap resamples for 95%" in help_text
+
+
+def test_prediction_release_gate_rejects_diagnostic_and_incomplete_manifests():
+    from pring_modeling.prediction_service import (
+        _require_scientific_release,
+        _scientific_release_status,
+    )
+
+    diagnostic = {
+        "status": "diagnostic_only",
+        "publishable": False,
+    }
+    with pytest.raises(RuntimeError, match="not approved for production serving"):
+        _require_scientific_release(diagnostic)
+
+    incomplete = {"status": "ready", "publishable": True}
+    assert _scientific_release_status(incomplete)["ready"] is False
+
+    ready = {
+        "status": "ready",
+        "publishable": True,
+        "dataset_id": "dataset",
+        "split_registry_id": "split",
+        "feature_schema_id": "features",
+        "label_policy_id": "labels",
+    }
+    assert _require_scientific_release(ready)["ready"] is True
+
+
+def test_shared_split_prefers_registered_groups_and_fails_closed():
+    from pring_modeling.shared_splits import _make_split, _scaffold_or_group_key
+
+    frame = pd.DataFrame(
+        {
+            "compound_key": [f"C{i}" for i in range(6)],
+            "split_group": ["G1", "G1", "G2", "G2", "G3", "G3"],
+        }
+    )
+    compound = frame["compound_key"]
+    groups = _scaffold_or_group_key(frame, compound, "registered")
+    assert groups.tolist() == frame["split_group"].tolist()
+
+    split = _make_split(
+        pd.Series([0, 1, 0, 1, 0, 1]),
+        groups,
+        seed=11,
+        test_size=0.2,
+        valid_size=0.2,
+    )
+    assert set(split) == {"train", "valid", "test"}
+    assert (
+        pd.DataFrame({"group": groups, "split": split})
+        .groupby("group")["split"]
+        .nunique()
+        .max()
+        == 1
+    )
+
+    with pytest.raises(ValueError, match="row-level fallback is prohibited"):
+        _make_split(
+            pd.Series([0, 1, 0, 1]),
+            pd.Series(["one", "one", "two", "two"]),
+            seed=11,
+            test_size=0.2,
+            valid_size=0.2,
+        )

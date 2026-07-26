@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import tempfile
 import zipfile
 from collections import Counter, OrderedDict
 from datetime import datetime
@@ -1424,10 +1425,17 @@ def display_graph(graph, action: str = "pring_graph") -> None:
     </script>
     """
 
-    output_path = "/tmp/pyvis_graph.html"
-    net.save_graph(output_path)
-    with open(output_path, "r", encoding="utf-8") as html_file:
-        graph_html = html_file.read()
+    with tempfile.NamedTemporaryFile(
+        prefix="pring-pyvis-",
+        suffix=".html",
+        delete=False,
+    ) as temp_file:
+        output_path = Path(temp_file.name)
+    try:
+        net.save_graph(str(output_path))
+        graph_html = output_path.read_text(encoding="utf-8")
+    finally:
+        output_path.unlink(missing_ok=True)
 
     additions = style + legend_html + custom_js
     graph_html = graph_html.replace("</body>", additions + "</body>") if "</body>" in graph_html else graph_html + additions

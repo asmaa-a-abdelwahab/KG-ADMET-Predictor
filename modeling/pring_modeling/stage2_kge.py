@@ -492,19 +492,36 @@ def _pairs_to_triples(df: pd.DataFrame, relation: str) -> pd.DataFrame:
 
 
 def _split_supervised_pairs(df: pd.DataFrame, seed: int):
-    split_col = next((c for c in ["split", "split_group", "stage_use"] if c in df.columns), None)
+    split_col = next(
+        (c for c in ["split", "data_split", "set", "partition", "stage_use"] if c in df.columns),
+        None,
+    )
     if split_col:
         s = df[split_col].astype(str).str.lower()
         train = df[s.str.contains("train")].copy()
         valid = df[s.str.contains("valid|val")].copy()
         test = df[s.str.contains("test")].copy()
-        if len(train) and len(test):
-            if len(valid) == 0:
-                train, valid = train_test_split(train, test_size=0.15, stratify=train["_label"], random_state=seed)
-            return train.reset_index(drop=True), valid.reset_index(drop=True), test.reset_index(drop=True)
+        if len(train) and len(valid) and len(test):
+            return (
+                train.reset_index(drop=True),
+                valid.reset_index(drop=True),
+                test.reset_index(drop=True),
+                {
+                    "registered_split_used": True,
+                    "split_origin": "supplied_split_registry",
+                },
+            )
     train_val, test = train_test_split(df, test_size=0.2, stratify=df["_label"], random_state=seed)
     train, valid = train_test_split(train_val, test_size=0.2, stratify=train_val["_label"], random_state=seed)
-    return train.reset_index(drop=True), valid.reset_index(drop=True), test.reset_index(drop=True)
+    return (
+        train.reset_index(drop=True),
+        valid.reset_index(drop=True),
+        test.reset_index(drop=True),
+        {
+            "registered_split_used": False,
+            "split_origin": "generated_component_split",
+        },
+    )
 
 
 def _make_decoder(name: str, seed: int, n_jobs: int):
@@ -535,7 +552,7 @@ def train_supervised_kge_decoder(model, dataset: KGDataset, modeling_root: Path,
     pairs, pair_file = _load_supervised_pairs(modeling_root)
     if pair_file is None or pairs.empty:
         return {"status": "skipped", "reason": "no_binary_supervised_pair_file_found", "pair_file": str(pair_file) if pair_file else None}
-    train_df, valid_df, test_df = _split_supervised_pairs(pairs, args.seed)
+    train_df, valid_df, test_df, split_audit = _split_supervised_pairs(pairs, args.seed)
     relation_name = relation_name or next(iter(dataset.relation_to_id.keys()))
 
     def encode_subset(frame: pd.DataFrame):
@@ -595,12 +612,26 @@ def train_supervised_kge_decoder(model, dataset: KGDataset, modeling_root: Path,
         max_per_class=args.balanced_eval_max_per_class,
     )
 
+    valid_pred = valid_rows.copy()
+    valid_pred["score"] = valid_score
+    valid_pred["predicted_label"] = (valid_score >= threshold).astype(int)
+    valid_pred["model"] = f"stage2_{args.model}_supervised_decoder"
+    valid_pred["stage"] = "Stage 2 — supervised KGE decoder"
+    valid_pred["split"] = "valid"
+    valid_pred["split_is_diagnostic"] = not split_audit["registered_split_used"]
+    valid_pred["split_origin"] = split_audit["split_origin"]
     pred = test_rows.copy()
     pred["score"] = test_score
     pred["predicted_label"] = (test_score >= threshold).astype(int)
     pred["model"] = f"stage2_{args.model}_supervised_decoder"
     pred["stage"] = "Stage 2 — supervised KGE decoder"
-    pred.to_csv(out_dir / "supervised_eval_predictions.csv", index=False)
+    pred["split"] = "test"
+    pred["split_is_diagnostic"] = not split_audit["registered_split_used"]
+    pred["split_origin"] = split_audit["split_origin"]
+    pd.concat([valid_pred, pred], ignore_index=True).to_csv(
+        out_dir / "supervised_eval_predictions.csv",
+        index=False,
+    )
     per_target = per_group_binary_metrics(
         pred,
         y_test,
@@ -614,7 +645,11 @@ def train_supervised_kge_decoder(model, dataset: KGDataset, modeling_root: Path,
     import joblib
     joblib.dump(decoder, joblib_path)
     return {
-        "status": "trained",
+        "status": (
+            "trained"
+            if split_audit["registered_split_used"]
+            else "diagnostic_only"
+        ),
         "pair_file": str(pair_file),
         "decoder": args.supervised_decoder,
         "relation": relation_name,
@@ -628,6 +663,7 @@ def train_supervised_kge_decoder(model, dataset: KGDataset, modeling_root: Path,
             "test": class_distribution(y_test),
         },
         "negative_source_summary": negative_source_summary(pairs, "_label"),
+        "split_audit": split_audit,
         "selected_threshold": float(threshold),
         "metrics": test_metrics,
         "operating_points": operating_points,

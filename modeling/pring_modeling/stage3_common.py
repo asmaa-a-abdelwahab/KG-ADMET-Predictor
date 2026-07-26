@@ -727,7 +727,10 @@ def filter_supervised_pairs(df: pd.DataFrame, y_col: str) -> pd.DataFrame:
     return out
 
 
-def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_pairs(
+    stage_dir: Path,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     # Prefer explicitly supervised training pairs, then fall back to broader
     # link-prediction files after filtering out unknown candidate labels.
     split_candidates = [
@@ -758,13 +761,21 @@ def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFr
             valid = df[split.isin(["valid", "validation", "val"])].copy()
             test = df[split.eq("test")].copy()
             if len(train) and len(valid) and len(test):
-                return train, valid, test
+                return train, valid, test, {
+                    "registered_split_used": True,
+                    "split_origin": "supplied_split_registry",
+                    "source_file": str(split_path),
+                }
 
         stratify = df["label"] if df["label"].nunique() == 2 else None
         train, tmp = train_test_split(df, test_size=0.30, stratify=stratify, random_state=seed)
         tmp_stratify = tmp["label"] if tmp["label"].nunique() == 2 else None
         valid, test = train_test_split(tmp, test_size=0.50, stratify=tmp_stratify, random_state=seed)
-        return train.copy(), valid.copy(), test.copy()
+        return train.copy(), valid.copy(), test.copy(), {
+            "registered_split_used": False,
+            "split_origin": "generated_component_split",
+            "source_file": str(split_path),
+        }
 
     pos_path = stage_dir / "positive_compound_target_pairs.csv"
     neg_path = stage_dir / "negative_compound_target_pairs.csv"
@@ -775,7 +786,11 @@ def load_pairs(stage_dir: Path, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFr
     df = pd.concat([pos, neg], ignore_index=True)
     train, tmp = train_test_split(df, test_size=0.30, stratify=df["label"], random_state=seed)
     valid, test = train_test_split(tmp, test_size=0.50, stratify=tmp["label"], random_state=seed)
-    return train.copy(), valid.copy(), test.copy()
+    return train.copy(), valid.copy(), test.copy(), {
+        "registered_split_used": False,
+        "split_origin": "generated_component_split",
+        "source_file": f"{pos_path};{neg_path}",
+    }
 
 
 def load_candidate_pairs(stage_dir: Path) -> pd.DataFrame | None:

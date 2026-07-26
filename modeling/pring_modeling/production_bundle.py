@@ -27,7 +27,11 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 
-from .final_validation import NumpyPlattCalibrator, expected_calibration_error
+from .final_validation import (
+    FixedMeanEnsemble,
+    NumpyPlattCalibrator,
+    expected_calibration_error,
+)
 
 DEPLOYABLE_SCORE_COLUMNS = [
     "score__stage1_tabular_extra_trees",
@@ -103,6 +107,7 @@ def build_production_bundle(
     stage1_feature_importance: str | Path | None = None,
     per_target_metrics: str | Path | None = None,
     allow_diagnostic_split: bool = False,
+    combiner: str = "fixed_mean",
 ) -> dict[str, Any]:
     """Build a deployable ensemble using only component scores reproducible at inference.
 
@@ -118,6 +123,9 @@ def build_production_bundle(
     frame = pd.read_csv(frame_path)
     training_frame_sha256 = _sha256_file(frame_path)
     score_columns = score_columns or list(DEPLOYABLE_SCORE_COLUMNS)
+    combiner = str(combiner or "fixed_mean").strip().lower()
+    if combiner not in {"fixed_mean", "stacked_extra_trees"}:
+        raise ValueError("combiner must be fixed_mean or stacked_extra_trees")
 
     component_split_columns = [c for c in frame.columns if c.startswith("split__")]
     held_out_names = {"test", "holdout", "heldout", "held_out"}
@@ -156,8 +164,20 @@ def build_production_bundle(
     train = split.eq("train")
     valid = split.isin(["valid", "validation", "val"])
     test = split.eq("test")
-    if not train.any() or not valid.any() or not test.any():
-        raise ValueError("Production bundle requires explicit train, valid and test rows.")
+    required_partitions_present = bool(valid.any() and test.any())
+    if combiner == "stacked_extra_trees":
+        required_partitions_present = bool(
+            required_partitions_present and train.any()
+        )
+    if not required_partitions_present:
+        required_names = (
+            "train, valid and test"
+            if combiner == "stacked_extra_trees"
+            else "valid and test"
+        )
+        raise ValueError(
+            f"Production bundle requires explicit {required_names} rows."
+        )
 
     normalized_final_split = split.replace({"validation": "valid", "val": "valid"})
     if not normalized_final_split.isin({"train", "valid", "test"}).all():
@@ -190,6 +210,7 @@ def build_production_bundle(
         )
 
     component_split_mismatches: dict[str, int] = {}
+    component_train_non_oof: dict[str, int] = {}
     split_aliases = {
         "validation": "valid",
         "val": "valid",
@@ -210,6 +231,15 @@ def build_production_bundle(
         component_split_mismatches[column] = int(
             component_split.ne(normalized_final_split).sum()
         )
+        raw_train_split = frame.loc[train, column].astype(str).str.lower().str.strip()
+        component_train_non_oof[column] = int(
+            (
+                ~raw_train_split.str.contains(
+                    r"oof|out[_ -]?of[_ -]?fold",
+                    regex=True,
+                )
+            ).sum()
+        )
     component_split_mismatches = {
         column: count for column, count in component_split_mismatches.items() if count
     }
@@ -218,21 +248,40 @@ def build_production_bundle(
             "Component predictions do not share the registered final split: "
             f"{component_split_mismatches}"
         )
+    component_train_non_oof = {
+        column: count for column, count in component_train_non_oof.items() if count
+    }
+    if (
+        combiner == "stacked_extra_trees"
+        and component_train_non_oof
+        and not allow_diagnostic_split
+    ):
+        raise ValueError(
+            "Meta-model training requires out-of-fold base predictions; "
+            f"non-OOF train rows were found: {component_train_non_oof}"
+        )
+    diagnostic_split = bool(
+        diagnostic_split
+        or (combiner == "stacked_extra_trees" and component_train_non_oof)
+    )
 
-    model = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        (
-            "classifier",
-            ExtraTreesClassifier(
-                n_estimators=800,
-                min_samples_leaf=2,
-                class_weight="balanced",
-                n_jobs=-1,
-                random_state=seed,
+    if combiner == "fixed_mean":
+        model = FixedMeanEnsemble()
+    else:
+        model = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            (
+                "classifier",
+                ExtraTreesClassifier(
+                    n_estimators=800,
+                    min_samples_leaf=2,
+                    class_weight="balanced",
+                    n_jobs=-1,
+                    random_state=seed,
+                ),
             ),
-        ),
-    ])
-    model.fit(frame.loc[train, score_columns], frame.loc[train, "label"])
+        ])
+        model.fit(frame.loc[train, score_columns], frame.loc[train, "label"])
 
     valid_raw = model.predict_proba(frame.loc[valid, score_columns])[:, 1]
     calibrator = NumpyPlattCalibrator().fit(valid_raw, frame.loc[valid, "label"].to_numpy())
@@ -244,23 +293,40 @@ def build_production_bundle(
     metrics = _metrics(frame.loc[test, "label"].to_numpy(), test_prob, threshold)
     valid_metrics = _metrics(frame.loc[valid, "label"].to_numpy(), valid_prob, threshold)
 
-    classifier = model.named_steps["classifier"]
-    importances = getattr(classifier, "feature_importances_", np.zeros(len(score_columns)))
+    if combiner == "fixed_mean":
+        importances = np.repeat(1.0 / len(score_columns), len(score_columns))
+    else:
+        classifier = model.named_steps["classifier"]
+        importances = getattr(
+            classifier,
+            "feature_importances_",
+            np.zeros(len(score_columns)),
+        )
     feature_importance = pd.DataFrame({
         "component_score": score_columns,
         "importance": np.asarray(importances, dtype=float),
     }).sort_values("importance", ascending=False)
     feature_importance.to_csv(output_dir / "component_feature_importance.csv", index=False)
 
-    background = frame.loc[train, score_columns].sample(
-        n=min(500, int(train.sum())), random_state=seed
+    background_source = frame.loc[
+        valid if combiner == "fixed_mean" else train,
+        score_columns,
+    ]
+    background = background_source.sample(
+        n=min(500, len(background_source)), random_state=seed
     )
     background.to_csv(output_dir / "explainability_background.csv", index=False)
-    medians = {c: float(frame.loc[train, c].median()) for c in score_columns}
+    medians = {c: float(background_source[c].median()) for c in score_columns}
 
     source_summary: dict[str, Any] = {}
     if source_metrics and Path(source_metrics).exists():
         source_summary = json.loads(Path(source_metrics).read_text(encoding="utf-8"))
+    required_source_provenance = ("dataset_id", "split_registry_id", "label_policy_id")
+    missing_source_provenance = [
+        key for key in required_source_provenance
+        if not str(source_summary.get(key) or "").strip()
+    ]
+    source_provenance_verified = not missing_source_provenance
 
     split_identity_columns = [
         column for column in ("pair_key", "compound_key", "target_key", "final_split")
@@ -276,7 +342,7 @@ def build_production_bundle(
         json.dumps(score_columns, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     model_version = "production-" + hashlib.sha256(
-        f"{training_frame_sha256}|{split_registry_id}|{score_schema_id}|{seed}".encode("utf-8")
+        f"{training_frame_sha256}|{split_registry_id}|{score_schema_id}|{combiner}|{seed}".encode("utf-8")
     ).hexdigest()[:12]
     runtime_versions = {
         "python": platform.python_version(),
@@ -292,13 +358,21 @@ def build_production_bundle(
         "score_columns": score_columns,
         "threshold": float(threshold),
         "background_medians": medians,
-        "model_name": "PRING deployable finalized ensemble",
+        "model_name": (
+            "PRING deployable fixed-mean ensemble"
+            if combiner == "fixed_mean"
+            else "PRING deployable stacked Extra Trees ensemble"
+        ),
         "model_version": model_version,
+        "combiner": combiner,
         "training_frame_sha256": training_frame_sha256,
         "dataset_id": source_summary.get("dataset_id", training_frame_sha256),
         "split_registry_id": source_summary.get("split_registry_id", split_registry_id),
         "feature_schema_id": score_schema_id,
-        "label_policy_id": source_summary.get("label_policy_id", "aggregated_pring_interaction_label"),
+        "label_policy_id": source_summary.get(
+            "label_policy_id",
+            "aggregated_pring_interaction_label-unverified-source",
+        ),
         "runtime_versions": runtime_versions,
         "seed": int(seed),
     }
@@ -319,11 +393,25 @@ def build_production_bundle(
         target.write_bytes(Path(per_target_metrics).read_bytes())
         copied_files["per_target_metrics"] = target.name
 
+    scientific_release_blockers = []
+    if diagnostic_split:
+        scientific_release_blockers.append("diagnostic split provenance")
+    if missing_source_provenance:
+        scientific_release_blockers.append(
+            "missing source provenance: " + ", ".join(missing_source_provenance)
+        )
+    publishable = not scientific_release_blockers
     manifest = {
-        "status": "diagnostic_only" if diagnostic_split else "ready",
-        "publishable": not diagnostic_split,
+        "status": "ready" if publishable else "diagnostic_only",
+        "publishable": publishable,
         "model_name": bundle["model_name"],
         "model_version": bundle["model_version"],
+        "combiner": combiner,
+        "combiner_protocol": (
+            "fixed_equal_weight_combiner_no_meta_training"
+            if combiner == "fixed_mean"
+            else "stacked_extra_trees_trained_on_out_of_fold_base_scores"
+        ),
         "training_frame": str(frame_path),
         "training_frame_sha256": training_frame_sha256,
         "dataset_id": bundle["dataset_id"],
@@ -332,6 +420,8 @@ def build_production_bundle(
         "label_policy_id": bundle["label_policy_id"],
         "runtime_versions": runtime_versions,
         "model_artifact_sha256": model_artifact_sha256,
+        "source_provenance_verified": source_provenance_verified,
+        "scientific_release_blockers": scientific_release_blockers,
         "selection_basis": (
             "MCC on a diagnostic validation re-split; not production-valid"
             if diagnostic_split
@@ -345,6 +435,7 @@ def build_production_bundle(
             "pair_duplicates": 0,
             "compound_partition_overlap": compound_overlap,
             "component_split_mismatches": component_split_mismatches,
+            "component_train_non_oof": component_train_non_oof,
             "partition_counts": {
                 "train": int(train.sum()),
                 "valid": int(valid.sum()),
@@ -371,6 +462,7 @@ def build_production_bundle(
         "validation_metrics": valid_metrics,
         "validation_mcc_at_selected_threshold": float(valid_mcc),
         "training_rows": int(train.sum()),
+        "meta_training_rows": int(train.sum()) if combiner == "stacked_extra_trees" else 0,
         "validation_rows": int(valid.sum()),
         "test_rows": int(test.sum()),
         "model_file": model_file.name,
@@ -402,7 +494,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--training-frame", required=True)
     p.add_argument("--output-dir", required=True)
     p.add_argument("--seed", type=int, default=5)
-    p.add_argument("--source-metrics", default=None)
+    p.add_argument(
+        "--combiner",
+        choices=["fixed_mean", "stacked_extra_trees"],
+        default="fixed_mean",
+        help=(
+            "fixed_mean avoids meta-model training and requires validation/test "
+            "scores; stacked_extra_trees additionally requires OOF training scores."
+        ),
+    )
+    p.add_argument(
+        "--source-metrics",
+        "--provenance-manifest",
+        dest="source_metrics",
+        default=None,
+        help=(
+            "Validated upstream JSON containing dataset_id, split_registry_id, "
+            "and label_policy_id. Without it the bundle is diagnostic-only."
+        ),
+    )
     p.add_argument("--stage1-feature-importance", default=None)
     p.add_argument("--per-target-metrics", default=None)
     p.add_argument("--score-columns", nargs="*", default=None)
@@ -425,6 +535,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         stage1_feature_importance=args.stage1_feature_importance,
         per_target_metrics=args.per_target_metrics,
         allow_diagnostic_split=args.allow_diagnostic_split,
+        combiner=args.combiner,
     )
     print(json.dumps(manifest, indent=2))
 

@@ -13,7 +13,7 @@ ERROR: No matching distribution found for pring
 The container is trying to install `pring` from PyPI. PRING is not published on PyPI, so the runtime must install it from either:
 
 1. a mounted local clone, or
-2. the public GitHub repository source archive.
+2. an immutable GitHub commit/tag archive or released wheel.
 
 ## Recommended `.env` options
 
@@ -22,7 +22,7 @@ The container is trying to install `pring` from PyPI. PRING is not published on 
 ```dotenv
 PRING_PROJECT_DIR=A:/Repositories/PRING-PACKAGE
 PRING_PACKAGE_DIR=/workspace/pring
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
+PRING_PACKAGE_SPEC=
 ```
 
 The local clone is preferred when it contains `pyproject.toml` or `setup.py`.
@@ -30,14 +30,17 @@ The local clone is preferred when it contains `pyproject.toml` or `setup.py`.
 ### Option B: install from GitHub
 
 ```dotenv
-PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/refs/heads/main.zip
+PRING_PACKAGE_SPEC=https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE/archive/<commit>.zip
 ```
 
 This works without `git` because pip downloads the source ZIP archive directly. The Dockerfiles also include `git`, so this also works:
 
 ```dotenv
-PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE.git
+PRING_PACKAGE_SPEC=git+https://github.com/asmaa-a-abdelwahab/PRING-PACKAGE.git@<commit>
 ```
+
+Branch archives such as `refs/heads/main.zip` are intentionally rejected because
+they can change between otherwise identical deployments.
 
 ## Rebuild after changing `.env`
 

@@ -534,8 +534,8 @@ run_final_validation() {
     python -m pring_modeling.final_validation
     --outputs-root "$OUT_ROOT"
     --output-dir "$out_dir"
-    --meta-classifier "${MODEL_FINAL_META_CLASSIFIER:-extra_trees}"
-    --split-strategy "${MODEL_FINAL_SPLIT_STRATEGY:-compound}"
+    --meta-classifier "${MODEL_FINAL_META_CLASSIFIER:-fixed_mean}"
+    --split-strategy "${MODEL_FINAL_SPLIT_STRATEGY:-registered}"
     --calibration "${MODEL_FINAL_CALIBRATION:-platt}"
     --seeds "${MODEL_FINAL_SEEDS:-$MODEL_SEED}"
     --threshold-selection "$PRIMARY_COMPARE_METRIC"
@@ -545,18 +545,22 @@ run_final_validation() {
     --report-high-specificity "$MODEL_REPORT_HIGH_SPECIFICITY"
     --report-min-recall "$MODEL_REPORT_MIN_RECALL"
     --balanced-eval-max-per-class "${MODEL_BALANCED_EVAL_MAX_PER_CLASS:-0}"
+    --bootstrap-resamples "${MODEL_FINAL_BOOTSTRAP_RESAMPLES:-1000}"
     --top-k-per-target "${MODEL_TOP_K_PER_TARGET:-50}"
     --uncertain-top-n "${MODEL_UNCERTAIN_TOP_N:-200}"
     --per-target-min-rows "${MODEL_PER_TARGET_MIN_ROWS:-100}"
     --n-jobs 16
   )
 
-  if [ "${MODEL_FINAL_STRICT_LEAKAGE_FREE:-false}" = "true" ]; then
+  if [ "${MODEL_FINAL_STRICT_LEAKAGE_FREE:-true}" = "true" ]; then
     args+=(--strict-leakage-free)
   fi
 
   if [ -n "${MODEL_EXTERNAL_LABELS:-}" ]; then
     args+=(--external-labels "$MODEL_EXTERNAL_LABELS")
+  fi
+  if [ -n "${MODEL_PROVENANCE_MANIFEST:-}" ]; then
+    args+=(--provenance-manifest "$MODEL_PROVENANCE_MANIFEST")
   fi
 
   run_cmd "${args[@]}"

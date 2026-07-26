@@ -29,7 +29,7 @@ fi
 
 PROJECT_DIR="${PROJECT_DIR:-/home/asmaaali/PRING-APP}"
 MODEL_ROOT="${MODEL_ROOT:-$PROJECT_DIR/modeling}"
-IMPL="${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved}}"
+IMPL="${MODEL_IMPL:-${MODEL_IMPLEMENTATION:-improved_v2}}"
 
 case "$IMPL" in
   legacy|old) IMPL="legacy" ;;
@@ -55,8 +55,16 @@ bash "$MODEL_ROOT/scripts/use_implementation.sh" "$IMPL"
 
 export MODEL_IMPL="$IMPL"
 export MODEL_IMPLEMENTATION="$IMPL"
-export MODELING_PACKAGE_DIR="$IMPL_DIR"
-export PYTHONPATH="$IMPL_DIR${PYTHONPATH:+:$PYTHONPATH}"
+if [ "$IMPL" = "improved_v2" ]; then
+  # The active package is the single canonical V2 implementation used by
+  # serving and training. Historical snapshots remain executable for explicit
+  # comparisons, but V2 wrappers must not import a drifting duplicate.
+  MODELING_PACKAGE_DIR="$MODEL_ROOT"
+else
+  MODELING_PACKAGE_DIR="$IMPL_DIR"
+fi
+export MODELING_PACKAGE_DIR
+export PYTHONPATH="$MODELING_PACKAGE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # Keep old and improved outputs separate by default. Override these env vars
 # manually if you intentionally want a shared output directory.

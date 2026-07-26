@@ -25,7 +25,16 @@ flowchart LR
 - Fit calibration and select the operating threshold on validation data.
 - Evaluate the locked test partition once.
 
-The simple ensemble and generated re-splits are marked `diagnostic_only`.
+The default final ensemble is a fixed, equal-weight mean of the three components
+that the live predictor can reproduce: Stage 1 Extra Trees, sampled R-GCN, and
+sampled HGT. Calibration and the operating threshold are fitted on the
+registered validation partition; the test partition is evaluated only after
+those choices are locked. A learned stack remains available only when every
+meta-training score is explicitly marked out of fold.
+
+Generated component re-splits, reused holdout scores, missing provenance, and
+learned stacks with non-OOF training scores are marked `diagnostic_only` or
+rejected in strict mode.
 
 ## Production bundle gate
 
@@ -46,4 +55,3 @@ Report discrimination, class-balanced metrics, calibration, uncertainty,
 per-target results, abstentions, and applicability-domain behavior. Include an
 external or temporal validation set whenever the scientific claim extends
 beyond the sampled graph.
-

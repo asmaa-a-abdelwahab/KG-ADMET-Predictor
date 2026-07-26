@@ -55,8 +55,34 @@ def _source_caption(source: str) -> str:
     }.get(source, f"Score source: {source or 'unknown'}.")
 
 
+def _render_scientific_status(payload: dict[str, Any]) -> bool:
+    provenance = payload.get("report_context", {}).get("model_provenance", {}) or {}
+    audit = provenance.get("reference_provenance_audit", {}) or {}
+    diagnostic = (
+        audit.get("scientific_status") == "diagnostic_only"
+        or provenance.get("publishable") is False
+    )
+    if diagnostic:
+        st.error(
+            "Diagnostic-only model artifacts are active. Outputs are available for "
+            "legacy reproduction and software testing, but the probabilities and "
+            "metrics are not valid production or publication evidence."
+        )
+        detail = audit.get("warning")
+        if detail:
+            st.caption(detail)
+        return True
+    if provenance.get("publishable") is not True:
+        st.warning(
+            "The model's scientific release status is unverified. Treat every output "
+            "as exploratory until provenance and release gates pass."
+        )
+    return False
+
+
 def _render_summary(payload: dict[str, Any]) -> None:
     st.markdown("## Compound-target interaction results")
+    _render_scientific_status(payload)
     summary = prediction_summary_dataframe(payload)
     if summary.empty:
         st.warning("No pair was successfully scored.")
@@ -84,7 +110,8 @@ def _render_summary(payload: dict[str, Any]) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Calibrated probability", _fmt_probability(pred.get("calibrated_probability")))
     c2.metric("Result", pred.get("predicted_class", "N/A"))
-    c3.metric("Model certainty", str(uncertainty.get("model_certainty", "N/A")).title())
+    confidence = uncertainty.get("heuristic_confidence", uncertainty.get("model_certainty", "N/A"))
+    c3.metric("Heuristic confidence", str(confidence).title())
     c4.metric("Evidence support", str(evidence.get("evidence_support", "N/A")).title())
 
     c5, c6, c7, c8 = st.columns(4)
@@ -186,16 +213,30 @@ def _render_explainability(payload: dict[str, Any]) -> None:
         st.dataframe(stage1_importance, use_container_width=True, hide_index=True)
 
     uncertainty = explanation.get("uncertainty_metrics", {}) or {}
-    calibration = explanation.get("calibration_metrics_on_frozen_test", {}) or {}
+    calibration = (
+        explanation.get("calibration_metrics_on_evaluation_partition")
+        or explanation.get("calibration_metrics_on_frozen_test")
+        or {}
+    )
     applicability = explanation.get("applicability_domain", {}) or {}
     st.markdown("### Uncertainty and applicability")
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Model certainty", str(uncertainty.get("model_certainty", "N/A")).title())
+    confidence = uncertainty.get("heuristic_confidence", uncertainty.get("model_certainty", "N/A"))
+    c1.metric("Heuristic confidence", str(confidence).title())
     c2.metric("Decision margin", _fmt_number(uncertainty.get("decision_margin"), 4))
     c3.metric("Model disagreement", _fmt_number(uncertainty.get("component_disagreement_std"), 4))
     c4.metric("Predictive entropy", f"{_fmt_number(uncertainty.get('predictive_entropy_bits'), 4)} bits")
     c5.metric("Applicability", str(applicability.get("status", "unknown")).replace("_", " ").title())
-    st.caption(uncertainty.get("model_certainty_reason", ""))
+    st.caption(
+        uncertainty.get(
+            "heuristic_confidence_reason",
+            uncertainty.get("model_certainty_reason", ""),
+        )
+    )
+    st.caption(
+        "This confidence band is a threshold-margin, component-dispersion, and "
+        "entropy diagnostic; it is not a validated uncertainty interval."
+    )
     st.caption(applicability.get("reason", ""))
 
     domain = pd.DataFrame(applicability.get("components", []) or [])
@@ -215,8 +256,9 @@ def _render_explainability(payload: dict[str, Any]) -> None:
             st.markdown("**Target-specific validation context**")
             st.dataframe(pd.DataFrame([target_metrics]), use_container_width=True, hide_index=True)
         c6, c7 = st.columns(2)
-        c6.metric("Frozen-test Brier score", _fmt_number(calibration.get("brier_score"), 4))
-        c7.metric("Frozen-test ECE", _fmt_number(calibration.get("expected_calibration_error"), 4))
+        metric_scope = "Diagnostic" if provenance_audit.get("scientific_status") == "diagnostic_only" else "Evaluation"
+        c6.metric(f"{metric_scope} Brier score", _fmt_number(calibration.get("brier_score"), 4))
+        c7.metric(f"{metric_scope} ECE", _fmt_number(calibration.get("expected_calibration_error"), 4))
 
     parity = payload.get("report_context", {}).get("live_inference_parity", {}) or {}
     with st.expander("Live-versus-precomputed parity validation", expanded=False):

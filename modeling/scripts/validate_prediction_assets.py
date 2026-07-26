@@ -154,12 +154,32 @@ def main() -> int:
             or manifest.get("publishable") is False
             or manifest.get("status") == "diagnostic_only"
         )
+        required_provenance_ids = [
+            "dataset_id",
+            "split_registry_id",
+            "feature_schema_id",
+            "label_policy_id",
+        ]
+        missing_provenance_ids = [
+            key for key in required_provenance_ids
+            if not str(manifest.get(key) or "").strip()
+        ]
+        scientific_release_approved = bool(
+            str(manifest.get("status") or "").strip().lower()
+            in {"ready", "production_ready"}
+            and manifest.get("publishable") is True
+            and not missing_provenance_ids
+            and not diagnostic
+        )
         report["checks"]["scientific_provenance"] = {
             "diagnostic": diagnostic,
             "component_split_columns": component_split_columns,
             "all_component_rows_held_out": all_components_held_out,
             "manifest_publishable": manifest.get("publishable"),
             "manifest_status": manifest.get("status"),
+            "required_provenance_ids": required_provenance_ids,
+            "missing_provenance_ids": missing_provenance_ids,
+            "release_approved": scientific_release_approved,
             "override_allowed": allow_diagnostic,
         }
         report["checks"]["cache_separation"] = {
@@ -186,6 +206,30 @@ def main() -> int:
                 "component predictions were already held out before the final "
                 "train/validation/test re-split"
             )
+        if not scientific_release_approved and not allow_diagnostic:
+            blockers.append(
+                "manifest is not an approved scientific release "
+                f"(status={manifest.get('status')!r}, publishable={manifest.get('publishable')!r}, "
+                f"missing provenance IDs={missing_provenance_ids})"
+            )
+        expected_frame_digest = str(manifest.get("training_frame_sha256") or "").strip()
+        actual_frame_digest = hashlib.sha256(score_file.read_bytes()).hexdigest()
+        report["checks"]["reference_frame_integrity"] = {
+            "expected": expected_frame_digest or None,
+            "actual": actual_frame_digest,
+            "verified": bool(expected_frame_digest and expected_frame_digest == actual_frame_digest),
+        }
+        if not expected_frame_digest:
+            blockers.append("manifest does not record the immutable reference-frame digest")
+        elif expected_frame_digest != actual_frame_digest:
+            blockers.append("immutable reference-frame digest does not match the manifest")
+        duplicate_pairs = int(frame.duplicated(["compound_key", "target_key"], keep=False).sum())
+        report["checks"]["pair_uniqueness"] = {
+            "duplicate_rows": duplicate_pairs,
+            "passed": duplicate_pairs == 0,
+        }
+        if duplicate_pairs:
+            blockers.append(f"reference frame contains {duplicate_pairs} duplicate pair rows")
         if blockers:
             raise ValueError("Production asset validation failed: " + "; ".join(blockers) + ".")
 
