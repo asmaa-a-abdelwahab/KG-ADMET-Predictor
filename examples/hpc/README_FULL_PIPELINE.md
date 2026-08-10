@@ -1,6 +1,7 @@
 # Complete five-CYP Slurm workflow
 
-`04_full_cyp450_pipeline.sbatch` is the canonical end-to-end HPC example for:
+`04_full_cyp450_pipeline.sbatch` is the canonical end-to-end implementation
+and Slurm entry point for:
 
 1. collecting or reusing PRING source data;
 2. creating a new, non-destructive modeling-ready run;
@@ -8,7 +9,7 @@
 4. loading that run into a dedicated Neo4j database;
 5. creating outcome-safe FastRP pair features from training-positive and
    label-independent similarity relationships;
-6. training Stage 1, DistMult/ComplEx/RotatE, R-GCN, and HGT;
+6. training Stage 1, ComplEx, DistMult, RotatE, R-GCN, and HGT;
 7. running fixed-mean, Platt-calibrated, multi-seed final validation; and
 8. producing machine-readable and Markdown readiness reports.
 
@@ -82,9 +83,10 @@ if torch.cuda.is_available():
 PY
 ```
 
-`BOOTSTRAP_ENV=true` can create and populate the ordinary Python environment
-inside the job, but it cannot safely choose a cluster-specific CUDA/PyG build.
-A prebuilt environment is recommended.
+`BOOTSTRAP_ENV=true` can create and populate the Python environment inside the
+job. Set `BOOTSTRAP_TORCH_PROFILE=cpu` or `cu124` only when that exact runtime
+matches the node; leave it at `none` for a preinstalled cluster-specific
+PyTorch/PyG build. A prebuilt environment is recommended.
 
 Final runs require both repositories to be clean Git checkouts by default.
 Commit and push the exact implementation before submission. A deliberately
@@ -123,6 +125,9 @@ export PRING_SOURCE_RUN_DIR=/project/pring/runs/source_run
 
 The source run is read but never modified. A new `_ready` run is created by
 `pring load-run`, so the original evidence remains available for audit.
+The script rejects reused sources whose quality report does not confirm an
+uncapped run, all candidate pairs, and pipeline-validation readiness without
+blockers.
 
 ## 4. Submit
 
@@ -215,6 +220,8 @@ The final readiness validator requires:
 
 - content-addressed dataset, feature-schema, split-registry, and label-policy
   identifiers;
+- an uncapped PRING quality report with all candidate pairs and no
+  pipeline-readiness blockers;
 - the cold-compound, train-only graph scope;
 - explicit exclusion of predictions from training;
 - all five CYP accessions;
@@ -222,6 +229,9 @@ The final readiness validator requires:
 - no duplicate supervised pair or split-group overlap;
 - EDA reports, tables, and figures;
 - Stage 1, KGE, R-GCN, HGT, and multi-seed final metrics;
+- separate completed metrics for ComplEx, DistMult, and RotatE;
+- at least five finalized seeds with common-test, calibration, per-target,
+  uncertainty, and ranking artifacts for each seed;
 - a Stage 1 GDS audit proving that held-out outcome relationship types were
   excluded and that dataset/split identifiers match;
 - a successful strict leakage gate; and
@@ -250,6 +260,9 @@ computational hypotheses.
   evaluation files.
 - Preserve the complete run directory, both Git commit hashes, environment
   specification, Slurm log, readiness reports, and model artifacts.
+- Keep weak numeric activity unlabeled by default
+  (`PRING_WEAK_ACTIVITY_AS_NEGATIVE=false`); changing this switch creates a
+  different label policy and therefore a different experiment.
 - Use a new run/output identifier for every rerun. The script refuses to
   overwrite or resume scientific results.
 
@@ -263,8 +276,13 @@ export MODEL_DEVICE=cpu
 export MODEL_STAGE1_DEVICE=cpu
 export MODEL_STAGE2_DEVICE=cpu
 export MODEL_STAGE3_DEVICE=cpu
-export MODEL_STAGE2_MODELS=distmult
+export MODEL_STAGE1_N_ESTIMATORS=20
+export MODEL_STAGE2_EPOCHS=1
+export MODEL_STAGE2_TARGET_TRAIN_REPEAT=1
+export MODEL_RGCN_EPOCHS=1
+export MODEL_HGT_EPOCHS=1
 export MODEL_FINAL_SEEDS=1
+export MODEL_FINAL_MIN_SEEDS=1
 export MODEL_FINAL_BOOTSTRAP_RESAMPLES=20
 export STAGE1_MAX_CANDIDATE_ROWS=1000
 export REQUIRE_CLEAN_GIT=false

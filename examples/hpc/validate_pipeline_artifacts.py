@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate artifacts produced by the end-to-end PRING HPC workflow.
+"""Validate artifacts produced by the end-to-end PRING five-CYP workflow.
 
 The validator deliberately reads only immutable run/model outputs.  It does not
 repair files, infer missing splits, or copy predictions into training data.
@@ -126,9 +126,13 @@ def _check_prepared_run(
     modeling_dir = run_dir / "graph" / "ml" / "modeling"
     manifest_path = run_dir / "manifest.json"
     model_manifest_path = modeling_dir / "modeling_stage_manifest.json"
+    quality_path = run_dir / "graph" / "run_quality_report.json"
+    readiness_path = run_dir / "graph" / "ml" / "modeling_readiness_manifest.json"
 
     _add_file_check(checks, "run manifest", manifest_path)
     _add_file_check(checks, "modeling-stage manifest", model_manifest_path)
+    _add_file_check(checks, "run quality report", quality_path)
+    _add_file_check(checks, "modeling readiness manifest", readiness_path)
 
     required_files = {
         "Stage 1 supervised pairs": (
@@ -184,6 +188,124 @@ def _check_prepared_run(
 
     summary: dict[str, Any] = {"modeling_dir": str(modeling_dir)}
     manifest: dict[str, Any] = {}
+    if _nonempty(quality_path):
+        try:
+            quality = _load_json(quality_path)
+            cap_report = quality.get("cap_completeness_report") or {}
+            readiness = quality.get("cyp450_gcn_readiness_report") or {}
+            similarity = quality.get("similarity_report") or {}
+            pair_summary = readiness.get("ml_pair_summary") or {}
+            quality_summary = {
+                "data_completeness_status": cap_report.get(
+                    "data_completeness_status"
+                ),
+                "pipeline_validation_ready": readiness.get(
+                    "pipeline_validation_ready"
+                ),
+                "blockers": readiness.get("blockers"),
+                "warnings": readiness.get("warnings"),
+                "candidate_missing_pair_mode": pair_summary.get(
+                    "candidate_missing_pair_mode"
+                ),
+                "dangling_similarity_edges": similarity.get(
+                    "dangling_similarity_edges"
+                ),
+            }
+            summary["run_quality"] = quality_summary
+            checks.extend(
+                [
+                    Check(
+                        name="uncapped source-data contract",
+                        status=(
+                            "pass"
+                            if quality_summary["data_completeness_status"]
+                            == "uncapped_or_no_internal_caps_detected"
+                            else "fail"
+                        ),
+                        detail=str(
+                            quality_summary["data_completeness_status"]
+                            or "missing"
+                        ),
+                    ),
+                    Check(
+                        name="PRING pipeline modeling readiness",
+                        status=(
+                            "pass"
+                            if quality_summary["pipeline_validation_ready"] is True
+                            and not quality_summary["blockers"]
+                            else "fail"
+                        ),
+                        detail=(
+                            f"ready={quality_summary['pipeline_validation_ready']}; "
+                            f"blockers={quality_summary['blockers']}; "
+                            f"warnings={quality_summary['warnings']}"
+                        ),
+                    ),
+                    Check(
+                        name="all unobserved candidate pairs exported",
+                        status=(
+                            "pass"
+                            if str(
+                                quality_summary["candidate_missing_pair_mode"]
+                            ).lower()
+                            == "all"
+                            else "fail"
+                        ),
+                        detail=str(
+                            quality_summary["candidate_missing_pair_mode"]
+                            or "missing"
+                        ),
+                    ),
+                    Check(
+                        name="complete compound-similarity endpoints",
+                        status=(
+                            "pass"
+                            if quality_summary["dangling_similarity_edges"] in (0, None)
+                            else "fail"
+                        ),
+                        detail=(
+                            "dangling_edges="
+                            f"{quality_summary['dangling_similarity_edges']}"
+                        ),
+                    ),
+                ]
+            )
+        except Exception as exc:
+            checks.append(
+                Check(
+                    name="run-quality JSON audit",
+                    status="fail",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
+
+    if _nonempty(readiness_path):
+        try:
+            readiness_manifest = _load_json(readiness_path)
+            checks.append(
+                Check(
+                    name="modeling export readiness",
+                    status=(
+                        "pass"
+                        if readiness_manifest.get("gcn_ready") is True
+                        and not readiness_manifest.get("blockers")
+                        else "fail"
+                    ),
+                    detail=(
+                        f"status={readiness_manifest.get('status')}; "
+                        f"blockers={readiness_manifest.get('blockers')}"
+                    ),
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                Check(
+                    name="modeling-readiness JSON audit",
+                    status="fail",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
+
     if _nonempty(model_manifest_path):
         manifest = _load_json(model_manifest_path)
         summary["modeling_manifest"] = {
@@ -392,6 +514,7 @@ def _check_prepared_run(
 
 def _check_eda(eda_dir: Path | None, checks: list[Check]) -> None:
     if eda_dir is None:
+        checks.append(Check("EDA output directory", "fail", "not provided"))
         return
     for filename in ("eda_report.html", "eda_report.md", "eda_summary.json"):
         _add_file_check(checks, f"EDA output: {filename}", eda_dir / filename)
@@ -426,6 +549,7 @@ def _check_final_models(
     model_report_dir: Path | None,
     checks: list[Check],
     expected_provenance: dict[str, Any] | None = None,
+    min_final_seeds: int = 5,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     if model_output_dir is None:
@@ -440,6 +564,9 @@ def _check_final_models(
         "final validation metrics": metrics_path,
         "multi-seed metrics": final_dir / "seed_metrics.csv",
         "multi-seed metric summary": final_dir / "seed_metric_summary.csv",
+        "merged base-prediction frame": (
+            final_dir / "merged_base_prediction_frame.csv"
+        ),
         "R-GCN metrics": (
             model_output_dir / "stage3_rgcn_sampled" / "metrics.json"
         ),
@@ -456,14 +583,78 @@ def _check_final_models(
             detail=f"files={len(stage1_metrics)}",
         )
     )
-    kge_metrics = list(model_output_dir.glob("stage2_*_supervised/metrics.json"))
-    checks.append(
-        Check(
-            name="knowledge-graph embedding metrics",
-            status="pass" if kge_metrics else "fail",
-            detail=f"files={len(kge_metrics)}",
+    for model in ("complex", "distmult", "rotate"):
+        _add_file_check(
+            checks,
+            f"Stage 2 {model} metrics",
+            model_output_dir / f"stage2_{model}_supervised" / "metrics.json",
         )
-    )
+
+    seed_metrics_path = final_dir / "seed_metrics.csv"
+    if _nonempty(seed_metrics_path):
+        try:
+            with seed_metrics_path.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as handle:
+                seed_rows = list(csv.DictReader(handle))
+            seed_values = []
+            for row in seed_rows:
+                raw_seed = str(row.get("seed") or "").strip()
+                if raw_seed:
+                    seed_values.append(str(int(float(raw_seed))))
+            distinct_seeds = sorted(set(seed_values), key=int)
+            checks.append(
+                Check(
+                    name="minimum completed final-validation seeds",
+                    status=(
+                        "pass"
+                        if len(distinct_seeds) >= min_final_seeds
+                        else "fail"
+                    ),
+                    detail=(
+                        f"seeds={','.join(distinct_seeds) or 'none'}; "
+                        f"required={min_final_seeds}"
+                    ),
+                )
+            )
+            seed_artifacts = (
+                "metrics.json",
+                "predictions.csv",
+                "finalized_training_frame.csv",
+                "calibration_bins.csv",
+                "common_test_model_metrics.csv",
+                "per_target_metrics.csv",
+                "top_k_by_target.csv",
+                "most_uncertain_predictions.csv",
+                "finalized_ensemble.joblib",
+            )
+            missing_seed_artifacts = []
+            for seed in distinct_seeds:
+                seed_dir = final_dir / f"seed_{seed}"
+                for filename in seed_artifacts:
+                    path = seed_dir / filename
+                    if not _nonempty(path):
+                        missing_seed_artifacts.append(str(path))
+            checks.append(
+                Check(
+                    name="per-seed common-test and reporting artifacts",
+                    status="pass" if not missing_seed_artifacts else "fail",
+                    detail=(
+                        f"complete_seeds={len(distinct_seeds)}"
+                        if not missing_seed_artifacts
+                        else "missing: " + ", ".join(missing_seed_artifacts)
+                    ),
+                )
+            )
+            summary["final_seeds"] = distinct_seeds
+        except Exception as exc:
+            checks.append(
+                Check(
+                    name="multi-seed artifact audit",
+                    status="fail",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
 
     if _nonempty(metrics_path):
         try:
@@ -482,9 +673,19 @@ def _check_final_models(
             checks.append(
                 Check(
                     name="strict final-validation release gate",
-                    status="pass" if metrics.get("publishable") is True else "fail",
+                    status=(
+                        "pass"
+                        if metrics.get("publishable") is True
+                        and not metrics.get("scientific_release_blockers")
+                        and metrics.get("implementation") == "improved_v2"
+                        and metrics.get("base_score_protocol")
+                        == "fixed_equal_weight_combiner_selected_before_test_no_meta_training"
+                        else "fail"
+                    ),
                     detail=(
                         f"status={metrics.get('status')}; "
+                        f"implementation={metrics.get('implementation')}; "
+                        f"protocol={metrics.get('base_score_protocol')}; "
                         f"blockers={metrics.get('scientific_release_blockers')}"
                     ),
                 )
@@ -514,25 +715,25 @@ def _check_final_models(
 
     if model_report_dir is not None:
         comparison_dir = model_report_dir / "comparison"
-        checks.append(
-            Check(
-                name="model-comparison report",
-                status=(
-                    "pass"
-                    if comparison_dir.is_dir()
-                    and any(path.is_file() for path in comparison_dir.rglob("*"))
-                    else "fail"
-                ),
-                detail=str(comparison_dir),
+        for filename in (
+            "model_comparison.csv",
+            "model_comparison.md",
+            "model_comparison_report.html",
+        ):
+            _add_file_check(
+                checks,
+                f"model comparison: {filename}",
+                comparison_dir / filename,
             )
-        )
+    else:
+        checks.append(Check("model report directory", "fail", "not provided"))
     return summary
 
 
 def _markdown_report(payload: dict[str, Any]) -> str:
     status = payload["status"].upper()
     lines = [
-        "# PRING HPC pipeline readiness report",
+        "# PRING five-CYP pipeline readiness report",
         "",
         f"- Status: **{status}**",
         f"- Phase: `{payload['phase']}`",
@@ -578,6 +779,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eda-dir", type=Path)
     parser.add_argument("--model-output-dir", type=Path)
     parser.add_argument("--model-report-dir", type=Path)
+    parser.add_argument(
+        "--min-final-seeds",
+        type=int,
+        default=5,
+        help="Minimum number of completed final-validation seeds (default: 5).",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-markdown", type=Path, required=True)
     parser.add_argument(
@@ -590,6 +797,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.min_final_seeds < 1:
+        raise SystemExit("--min-final-seeds must be at least 1")
     run_dir = args.run_dir.expanduser().resolve()
     checks: list[Check] = []
     details = _check_prepared_run(
@@ -613,6 +822,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 ),
                 checks,
                 details.get("modeling_manifest") or {},
+                args.min_final_seeds,
             )
         )
 
@@ -620,7 +830,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         check for check in checks if check.critical and check.status != "pass"
     ]
     payload = {
-        "format": "pring-hpc-pipeline-readiness-v1",
+        "format": "pring-five-cyp-pipeline-readiness-v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "phase": args.phase,
         "status": "pass" if not failed_critical else "fail",

@@ -87,6 +87,7 @@ RUN_COMPARE="${RUN_COMPARE:-true}"
 RUN_ENSEMBLE="${RUN_ENSEMBLE:-true}"
 RUN_FINAL_VALIDATION="${RUN_FINAL_VALIDATION:-true}"
 MODEL_SEED="${MODEL_SEED:-42}"
+MODEL_N_JOBS="${MODEL_N_JOBS:-${SLURM_CPUS_PER_TASK:-16}}"
 
 DEVICE="${MODEL_DEVICE:-auto}"
 if [ "$DEVICE" = "auto" ] || [ -z "$DEVICE" ]; then
@@ -249,6 +250,7 @@ run_stage1() {
     --group-column "$STAGE1_GROUP_COLUMN"
     --balanced-eval-max-per-class "${MODEL_BALANCED_EVAL_MAX_PER_CLASS:-0}"
     --seed "$MODEL_SEED"
+    --n-jobs "$MODEL_N_JOBS"
   )
 
   if [ "$STAGE1_RDKIT_FEATURES" = "true" ]; then
@@ -297,6 +299,7 @@ run_stage2_model() {
     --report-min-recall "$MODEL_REPORT_MIN_RECALL"
     --seed "$MODEL_SEED"
     --device "$STAGE2_DEVICE"
+    --n-jobs "$MODEL_N_JOBS"
   )
 
   if has_flag "$help_text" "--score-batch-size"; then
@@ -481,7 +484,7 @@ run_stage3_hgt() {
   fi
 
   if has_flag "$help_text" "--patience"; then
-    args+=(--patience 10)
+    args+=(--patience "$STAGE3_PATIENCE")
   fi
 
   # HGT + pyg-lib can fail with AMP Half/Float mismatch, so disable AMP if the CLI supports it.
@@ -518,7 +521,7 @@ run_ensemble() {
     --report-min-specificity "$MODEL_REPORT_MIN_SPECIFICITY" \
     --report-high-specificity "$MODEL_REPORT_HIGH_SPECIFICITY" \
     --report-min-recall "$MODEL_REPORT_MIN_RECALL" \
-    --n-jobs 16
+    --n-jobs "$MODEL_N_JOBS"
 }
 
 
@@ -553,7 +556,7 @@ run_final_validation() {
     --top-k-per-target "${MODEL_TOP_K_PER_TARGET:-50}"
     --uncertain-top-n "${MODEL_UNCERTAIN_TOP_N:-200}"
     --per-target-min-rows "${MODEL_PER_TARGET_MIN_ROWS:-100}"
-    --n-jobs 16
+    --n-jobs "$MODEL_N_JOBS"
   )
 
   if [ "${MODEL_FINAL_STRICT_LEAKAGE_FREE:-true}" = "true" ]; then

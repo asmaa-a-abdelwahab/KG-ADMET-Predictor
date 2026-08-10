@@ -190,11 +190,27 @@ The Streamlit app can also trigger this command from the **PRING run data / EDA*
 
 ---
 
-## 3. HPC workflow
+## 3. Complete local and HPC workflows
+
+### Complete local five-CYP workflow
+
+For a complete local/WSL run using an isolated Neo4j+GDS container (or a
+dedicated external database), use:
+
+```bash
+export NEO4J_PASSWORD='<injected-secret>'
+bash examples/local/05_full_cyp450_pipeline.sh \
+  /secure/path/pring-local.env
+```
+
+See [`examples/local/README_FULL_PIPELINE.md`](examples/local/README_FULL_PIPELINE.md)
+and [`examples/local/full_pipeline.env.example`](examples/local/full_pipeline.env.example).
+
+### HPC workflow
 
 Use the example Slurm scripts in `examples/hpc/`.
 
-### Complete five-CYP scientific workflow
+#### Complete five-CYP scientific workflow
 
 For a new or existing PRING-PACKAGE run followed by modeling-ready
 rematerialization, EDA, Neo4j/GDS feature export, all canonical modeling stages,
@@ -213,7 +229,7 @@ See [`examples/hpc/README_FULL_PIPELINE.md`](examples/hpc/README_FULL_PIPELINE.m
 for environment preparation, scheduler configuration, output contracts,
 scientific safeguards, and a bounded smoke-run profile.
 
-### Load an existing PRING run to Neo4j
+#### Load an existing PRING run to Neo4j
 
 ```bash
 sbatch \
@@ -221,7 +237,7 @@ sbatch \
   examples/hpc/01_load_pring_run_to_neo4j.sbatch
 ```
 
-### Train the model from `graph/ml` exports
+#### Train the model from `graph/ml` exports
 
 ```bash
 sbatch \
