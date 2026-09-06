@@ -44,9 +44,9 @@ services:
       OPENBLAS_NUM_THREADS: "${PREDICTION_CPU_THREADS:-4}"
       MALLOC_ARENA_MAX: "${MALLOC_ARENA_MAX:-2}"
     volumes:
-      - ./artifacts/models:/models:ro
+      - ./artifacts/models:/models:rw
       - ./artifacts/results:/results
-      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:ro
+      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:rw
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=5)"]
       interval: 15s

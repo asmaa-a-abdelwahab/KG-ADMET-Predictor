@@ -29,7 +29,7 @@ services:
       - neo4j-logs:/logs
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
       # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
-      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
+      - ${PRING_RUNS_DIR:-./runs}:/runs:rw
       - ./artifacts/neo4j-import:/import
     healthcheck:
       # Use Neo4j's built-in cypher-shell rather than wget/curl. Some Neo4j
@@ -66,7 +66,7 @@ services:
       PRING_ALLOW_NETWORK: "${PRING_ALLOW_NETWORK:-false}"
     volumes:
       - ${PRING_RUNS_DIR:-./runs}:/runs
-      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:rw
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/load_pring_run.sh"]
 
@@ -94,8 +94,8 @@ services:
     volumes:
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
       # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
-      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
-      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
+      - ${PRING_RUNS_DIR:-./runs}:/runs:rw
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:rw
       - ./artifacts/models:/models
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/run_modeling.sh"]
@@ -171,9 +171,9 @@ services:
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-cyp450kg}"
       NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     volumes:
-      - ./artifacts/models:/models:ro
+      - ./artifacts/models:/models:rw
       - ./artifacts/results:/results
-      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:ro
+      - ${MODEL_PREPARED_DIR:-./artifacts/modeling_prepared}:/modeling_prepared:rw
     command: ["/opt/kg/start_prediction_api.sh"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=5)"]
@@ -211,9 +211,9 @@ services:
     volumes:
       # Do not bind-mount neo4j.conf as a single file on Docker Desktop;
       # Neo4j/APOC edits this file during startup and bind mounts cause sed rename failures.
-      - ${PRING_RUNS_DIR:-./runs}:/runs:ro
-      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:ro
-      - ./artifacts/models:/models:ro
+      - ${PRING_RUNS_DIR:-./runs}:/runs:rw
+      - ${PRING_PROJECT_DIR:-../PRING-PACKAGE}:/workspace/pring:rw
+      - ./artifacts/models:/models:rw
       - ./artifacts/reports:/reports
     command: ["/opt/kg/bin/start_streamlit.sh"]
 
