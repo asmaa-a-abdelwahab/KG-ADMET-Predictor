@@ -1,0 +1,173 @@
+# PRING final MSc thesis run configuration
+# Paths below are examples for the user's HPC and should be changed only if the
+# repositories/venv are stored elsewhere. Passwords must stay in environment variables.
+
+project:
+  package_dir: /home/asmaaali/PRING-PACKAGE
+  app_dir: /home/asmaaali/PRING-APP
+  run_root: /home/asmaaali/PRING-PACKAGE/runs
+  output_root: /home/asmaaali/PRING-APP/results/final_thesis_run
+  cache_dir: /scratch/asmaaali/pring_cache
+  source_run_dir: null              # Set to an existing validated uncapped PRING run to reuse source data.
+  raw_run_id: cyp450_5enzymes_final_raw
+  ready_run_id: cyp450_5enzymes_final_ready
+  require_clean_git: true
+
+cyp450:
+  targets:
+    CYP1A2: P05177
+    CYP2C9: P11712
+    CYP2C19: P33261
+    CYP2D6: P10635
+    CYP3A4: P08684
+
+scientific:
+  master_seed: 42
+  final_validation_seeds: [1, 2, 3, 4, 5]
+  taxid: 9606
+  activity_threshold_um: 10.0
+  weak_activity_as_negative: false
+  candidate_pair_mode: all
+  compound_similarity_threshold: 90
+  include_compound_similarity: true
+  include_textmining: false
+  include_endpoint_references: false
+  plugins: [uniprot, go, reactome, interpro]
+  # These values intentionally preserve the current canonical final PRING workflow.
+  split_strategy: registered
+  final_combiner: fixed_mean
+  final_calibration: platt
+  threshold_selection: mcc
+  min_specificity: 0.50
+  min_recall: 0.0
+
+resources:
+  cpus: 24
+  memory_mb: 240000
+  memory_safety_margin_mb: 8192
+  reserve_system_memory_mb: 8192
+  model_device: cuda
+  omp_threads: 1
+  torch_threads: 1
+  torch_interop_threads: 1
+  neo4j_load_batch_size: 1000
+  stage1_export_chunk_size: 50000
+  stage1_neo4j_batch_size: 5000
+
+collection:
+  mode: sparql
+  sparql_page_size: 10
+  sparql_timeout_s: 300
+  sparql_evidence_timeout_s: 300
+  sparql_max_retries: 5
+  sparql_evidence_max_retries: 2
+  save_raw: true
+  save_extracted: true
+  # Final run is deliberately uncapped. Do not replace these null values with
+  # convenience caps for a thesis run.
+  max_compounds_per_target: null
+  max_targets_per_compound: null
+  max_substances_per_compound: null
+  max_measuregroups_per_target: null
+  max_measuregroups_per_compound: null
+  max_endpoints_per_pair: null
+  max_similar_compounds_per_compound: null
+  max_textmine_records: null
+  max_textmine_records_per_target: null
+  max_textmine_references_per_pair: null
+  max_enrichment_records_per_entity: null
+  max_candidate_missing_pairs: null
+
+neo4j:
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  database: neo4j
+  password_env: NEO4J_PASSWORD
+  require_empty_database: true
+  compute_wcc: true
+  wcc_graph_name: pring_final_thesis_wcc
+
+eda:
+  top_n: 30
+
+models:
+  stage1:
+    classifier: extra_trees
+    n_estimators: 1000
+    min_samples_leaf: 5
+    cv_folds: 5
+    group_column: compound_node_id
+    rdkit_features: false
+    max_training_rows: 0
+    max_candidate_rows: 0
+    max_predictions_file_rows: 0
+
+  stage2:
+    enabled: true
+    models: [complex, distmult, rotate]
+    epochs: 150
+    dim: 128
+    batch_size: 16384
+    score_batch_size: 65536
+    max_graph_train_triples: 0
+    target_train_repeat: 20
+    negatives_per_positive: 5
+    eval_negatives_per_positive: 10
+    supervised_decoder: extra_trees
+    checkpoint_metric: roc_auc
+    # Stage 2 is evaluated and compared, but is not part of the validated
+    # deployable fixed-mean ensemble. Candidate scoring is therefore optional.
+    score_candidates: false
+    max_candidate_triples: 0
+
+  stage3:
+    rgcn_epochs: 100
+    rgcn_hidden_dim: 128
+    rgcn_layers: 2
+    rgcn_neighbors: "15,10"
+    rgcn_batch_size: 128
+    hgt_epochs: 100
+    hgt_hidden_dim: 64
+    hgt_layers: 2
+    hgt_neighbors: "10,5"
+    hgt_batch_size: 64
+    hgt_heads: 2
+    dropout: 0.20
+    learning_rate: 0.001
+    loss: weighted_bce_bpr
+    bpr_weight: 0.5
+    class_weighting: negative_ratio
+    balance_ratio: 1.0
+    early_stopping_metric: mcc
+    patience: 12
+    score_candidates: true
+    max_candidate_pairs: 0
+
+  final_validation:
+    bootstrap_resamples: 1000
+    top_k_per_target: 50
+    uncertain_top_n: 200
+    per_target_min_rows: 100
+    balanced_eval_max_per_class: 0
+
+predictions:
+  enabled: true
+  strict_component_coverage: true
+  top_n_per_cyp: 100
+  write_full_csv: true
+  write_parquet: true
+
+reporting:
+  figure_dpi: 400
+  save_png: true
+  save_pdf: true
+  save_svg: true
+
+provenance:
+  hash_source_inputs: true
+  hash_chunk_mb: 8
+  record_pip_freeze: true
+
+smoke_tests:
+  run_pring_demo: true
+  run_cli_contract_checks: true
